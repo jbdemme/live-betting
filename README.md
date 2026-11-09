@@ -1,36 +1,54 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Lecture Bets — Live Micro-Betting (v1 prototype)
 
-## Getting Started
+Students bet play-money points on live lecture micro-events using parimutuel pools.
+See `CLAUDE.md` for the product and domain spec.
 
-First, run the development server:
+## Run
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+pnpm install
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+```bash
+node server.js   # Socket.io engine on :4000 (in-memory; restart = reset)
+```
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+pnpm dev         # Next.js app on :3000
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Open several browser windows (or private windows) to play as different users.
+Set `NEXT_PUBLIC_SOCKET_URL` to point the client at another engine URL, and `CLIENT_ORIGIN`
+(comma-separated) on the server to restrict CORS.
 
-## Learn More
+## Neutral Referee rules
 
-To learn more about Next.js, take a look at the following resources:
+- New users start with **1,000 pts**.
+- Each market has at most one **Referee**, who alone may settle it. You can claim Referee only
+  while betting is open and only if you have **no bets** on that market. A Referee can't bet on it.
+- When the betting timer ends the market **locks**. With no Referee it **auto-voids**; otherwise the
+  Referee has **60s** to declare the winner, or it auto-voids.
+- **Settle:** each winner gets `wager × (total pool / winning pool)` (rounded down). The Referee gets
+  a bounty of **5% of the total pool**, minted on top (it doesn't reduce winners' payouts).
+  If nobody backed the winning option, the market is voided instead.
+- **Void:** every wager is refunded in full.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Layout
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+| Path | Purpose |
+| --- | --- |
+| `server.js` | Socket.io engine: users, markets, pools, bets, timers |
+| `lib/types.ts` | Shared wire types and typed Socket.io event maps |
+| `lib/socket.ts` | Socket singleton + client actions (create, bet, claim, settle) |
+| `hooks/useSocket.ts` | Connection lifecycle; mirrors server broadcasts into the store |
+| `store/useBettingStore.ts` | Zustand store: user, markets with live odds, my bets |
+| `components/` | `Navbar`, `MarketCard`, `CreateMarketModal`, `Toasts` |
+| `app/page.tsx` | Join screen + feed of live and recently resolved markets |
 
-## Deploy on Vercel
+## Socket events
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+Client → server (all acknowledged with `{ ok, data } | { ok: false, error }`):
+`REGISTER_USER`, `CREATE_MARKET`, `PLACE_BET`, `CLAIM_REFEREE`, `SETTLE_MARKET`.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Server → client: `MARKET_CREATED`, `MARKET_UPDATED`, `ODDS_UPDATE` (on every bet),
+`MARKET_SETTLED`, `MARKET_VOIDED`, `BALANCE_UPDATE`, `PAYOUT`.
