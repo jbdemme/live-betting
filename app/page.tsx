@@ -1,69 +1,146 @@
-import Image from "next/image";
+"use client";
+
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import { v4 as uuidv4 } from "uuid";
+import Navbar from "@/components/Navbar";
+import MarketCard from "@/components/MarketCard";
+import CreateMarketModal from "@/components/CreateMarketModal";
+import Toasts from "@/components/Toasts";
+import { loadIdentity, saveIdentity, useSocket } from "@/hooks/useSocket";
+import { SOCKET_URL } from "@/lib/socket";
+import { selectActiveMarkets, selectResolvedMarkets, useBettingStore } from "@/store/useBettingStore";
 
 export default function Home() {
+  const identity = useBettingStore((s) => s.identity);
+  const identityLoaded = useBettingStore((s) => s.identityLoaded);
+  const setIdentity = useBettingStore((s) => s.setIdentity);
+  const [createOpen, setCreateOpen] = useState(false);
+
+  // Hydrate identity from localStorage after mount (not available during SSR).
+  useEffect(() => {
+    setIdentity(loadIdentity());
+  }, [setIdentity]);
+
+  useSocket(identity);
+
+  const signOut = useCallback(() => {
+    saveIdentity(null);
+    setIdentity(null);
+  }, [setIdentity]);
+
+  const closeCreate = useCallback(() => setCreateOpen(false), []);
+
+  if (!identityLoaded) return <main className="flex-1" />;
+  if (!identity) return <JoinScreen />;
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert h-5 w-[100px]"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the{" "}
-            <code className="rounded bg-black/[.06] px-1.5 py-0.5 font-mono text-[0.9em] dark:bg-white/[.08]">
-              page.tsx
-            </code>{" "}
-            file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
+    <>
+      <Navbar onCreateMarket={() => setCreateOpen(true)} onSignOut={signOut} />
+      <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-6">
+        <MarketFeed onCreate={() => setCreateOpen(true)} />
+      </main>
+      <CreateMarketModal open={createOpen} onClose={closeCreate} />
+      <Toasts />
+    </>
+  );
+}
+
+function MarketFeed({ onCreate }: { onCreate: () => void }) {
+  const markets = useBettingStore((s) => s.markets);
+  const connection = useBettingStore((s) => s.connection);
+  const active = useMemo(() => selectActiveMarkets(markets), [markets]);
+  const resolved = useMemo(() => selectResolvedMarkets(markets), [markets]);
+
+  return (
+    <div className="space-y-8">
+      {connection === "disconnected" && (
+        <div className="rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">
+          Can&apos;t reach the betting engine at <code className="font-mono">{SOCKET_URL}</code>. Is{" "}
+          <code className="font-mono">node server.js</code> running? Retrying…
+        </div>
+      )}
+
+      <section>
+        <div className="mb-3 flex items-baseline justify-between">
+          <h2 className="text-sm font-semibold uppercase tracking-wider text-zinc-400">
+            Live markets <span className="ml-1 text-zinc-600">{active.length}</span>
+          </h2>
+        </div>
+        {active.length === 0 ? (
+          <div className="rounded-2xl border border-dashed border-zinc-800 px-6 py-12 text-center">
+            <p className="text-zinc-400">No live markets right now.</p>
+            <button
+              type="button"
+              onClick={onCreate}
+              disabled={connection !== "connected"}
+              className="mt-3 rounded-lg bg-indigo-500 px-4 py-2 text-sm font-semibold text-white transition hover:bg-indigo-400 disabled:opacity-40"
             >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
+              Create the first one
+            </button>
+          </div>
+        ) : (
+          <div className="grid gap-4 lg:grid-cols-2">
+            {active.map((m) => (
+              <MarketCard key={m.id} market={m} />
+            ))}
+          </div>
+        )}
+      </section>
+
+      {resolved.length > 0 && (
+        <section>
+          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-zinc-400">Recently resolved</h2>
+          <div className="grid gap-4 lg:grid-cols-2">
+            {resolved.map((m) => (
+              <MarketCard key={m.id} market={m} />
+            ))}
+          </div>
+        </section>
+      )}
+    </div>
+  );
+}
+
+function JoinScreen() {
+  const setIdentity = useBettingStore((s) => s.setIdentity);
+  const [username, setUsername] = useState("");
+
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    const name = username.trim();
+    if (!name) return;
+    const identity = { userId: uuidv4(), username: name };
+    saveIdentity(identity);
+    setIdentity(identity);
+  };
+
+  return (
+    <main className="flex flex-1 items-center justify-center px-4">
+      <form onSubmit={submit} className="w-full max-w-sm space-y-5 rounded-2xl border border-zinc-800 bg-zinc-900 p-6">
+        <div>
+          <span className="grid h-10 w-10 place-items-center rounded-xl bg-indigo-500 font-black text-white">LB</span>
+          <h1 className="mt-4 text-2xl font-bold tracking-tight text-zinc-100">Lecture Bets</h1>
+          <p className="mt-1 text-sm text-zinc-400">
+            Predict what happens in this lecture. You start with{" "}
+            <span className="font-mono text-emerald-300">1,000 pts</span> of play money.
           </p>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert h-[14px] w-4"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={14}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
-    </div>
+        <input
+          value={username}
+          onChange={(e) => setUsername(e.target.value)}
+          maxLength={24}
+          autoFocus
+          required
+          placeholder="Pick a username"
+          className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2.5 text-zinc-100 outline-none placeholder:text-zinc-600 focus:border-indigo-500"
+        />
+        <button
+          type="submit"
+          className="w-full rounded-lg bg-indigo-500 py-2.5 font-semibold text-white transition hover:bg-indigo-400"
+        >
+          Join lecture
+        </button>
+      </form>
+    </main>
   );
 }
