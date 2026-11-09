@@ -23,11 +23,6 @@ export default function Home() {
 
   useSocket(identity);
 
-  const signOut = useCallback(() => {
-    saveIdentity(null);
-    setIdentity(null);
-  }, [setIdentity]);
-
   const closeCreate = useCallback(() => setCreateOpen(false), []);
 
   if (!identityLoaded) return <main className="flex-1" />;
@@ -35,7 +30,7 @@ export default function Home() {
 
   return (
     <>
-      <Navbar onCreateMarket={() => setCreateOpen(true)} onSignOut={signOut} />
+      <Navbar onCreateMarket={() => setCreateOpen(true)} />
       <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-6">
         <MarketFeed onCreate={() => setCreateOpen(true)} />
       </main>
