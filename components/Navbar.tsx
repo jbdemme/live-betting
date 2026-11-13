@@ -12,10 +12,9 @@ const CONNECTION_STYLE: Record<ConnectionStatus, { dot: string; label: string }>
 
 interface NavbarProps {
   onCreateMarket: () => void;
-  onSignOut: () => void;
 }
 
-export default function Navbar({ onCreateMarket, onSignOut }: NavbarProps) {
+export default function Navbar({ onCreateMarket }: NavbarProps) {
   const user = useBettingStore((s) => s.currentUser);
   const identity = useBettingStore((s) => s.identity);
   const connection = useBettingStore((s) => s.connection);
@@ -55,17 +54,15 @@ export default function Navbar({ onCreateMarket, onSignOut }: NavbarProps) {
             <span className="hidden sm:inline">+ Create Market</span>
           </button>
 
-          <button
-            type="button"
-            onClick={onSignOut}
-            title="Switch user"
-            className="flex items-center gap-2 rounded-full border border-zinc-800 bg-zinc-900 py-1 pl-1 pr-3 text-sm text-zinc-200 transition hover:border-zinc-700"
+          <div
+            className="flex items-center gap-2 rounded-full border border-zinc-800 bg-zinc-900 py-1 pl-1 pr-3 text-sm text-zinc-200"
+            aria-label="Signed in user"
           >
             <span className="grid h-6 w-6 place-items-center rounded-full bg-zinc-700 text-xs font-bold uppercase">
               {username.slice(0, 1) || "?"}
             </span>
             <span className="max-w-24 truncate">{username}</span>
-          </button>
+          </div>
         </div>
       </nav>
     </header>

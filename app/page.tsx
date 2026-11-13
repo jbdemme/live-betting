@@ -23,11 +23,6 @@ export default function Home() {
 
   useSocket(identity);
 
-  const signOut = useCallback(() => {
-    saveIdentity(null);
-    setIdentity(null);
-  }, [setIdentity]);
-
   const closeCreate = useCallback(() => setCreateOpen(false), []);
 
   if (!identityLoaded) return <main className="flex-1" />;
@@ -35,7 +30,7 @@ export default function Home() {
 
   return (
     <>
-      <Navbar onCreateMarket={() => setCreateOpen(true)} onSignOut={signOut} />
+      <Navbar onCreateMarket={() => setCreateOpen(true)} />
       <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-6">
         <MarketFeed onCreate={() => setCreateOpen(true)} />
       </main>
@@ -55,8 +50,13 @@ function MarketFeed({ onCreate }: { onCreate: () => void }) {
     <div className="space-y-8">
       {connection === "disconnected" && (
         <div className="rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">
-          Can&apos;t reach the betting engine at <code className="font-mono">{SOCKET_URL}</code>. Is{" "}
-          <code className="font-mono">node server.js</code> running? Retrying…
+          Can&apos;t reach the betting engine
+          {SOCKET_URL && (
+            <>
+              {" "}at <code className="font-mono">{SOCKET_URL}</code>
+            </>
+          )}
+          . Retrying… (If the server was asleep, this can take up to a minute.)
         </div>
       )}
 

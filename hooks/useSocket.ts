@@ -28,10 +28,10 @@ export function loadIdentity(): Identity | null {
   return null;
 }
 
-export function saveIdentity(identity: Identity | null): void {
+/** Persist the identity. There is deliberately no way to clear it: one user per browser. */
+export function saveIdentity(identity: Identity): void {
   try {
-    if (identity) window.localStorage.setItem(IDENTITY_KEY, JSON.stringify(identity));
-    else window.localStorage.removeItem(IDENTITY_KEY);
+    window.localStorage.setItem(IDENTITY_KEY, JSON.stringify(identity));
   } catch {
     // Ignore storage failures; the session still works until refresh.
   }

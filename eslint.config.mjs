@@ -5,9 +5,9 @@ import nextTs from "eslint-config-next/typescript";
 const eslintConfig = defineConfig([
   ...nextVitals,
   ...nextTs,
-  // The Socket.io engine is a plain CommonJS Node script (`node server.js`).
+  // The Socket.io engine and production server are plain CommonJS Node scripts.
   {
-    files: ["server.js"],
+    files: ["server.js", "app-server.js"],
     rules: { "@typescript-eslint/no-require-imports": "off" },
   },
   // Override default ignores of eslint-config-next.
