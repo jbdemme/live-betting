@@ -1,0 +1,16 @@
+# Render Blueprint: one free web service running Next.js + the Socket.io engine on one port.
+# Deploy: Render dashboard -> New -> Blueprint -> pick this repo.
+services:
+  - type: web
+    name: lecture-bets
+    runtime: node
+    plan: free
+    branch: main
+    # pnpm is fetched at the version pinned in package.json's "packageManager".
+    buildCommand: npx --yes pnpm@11.5.2 install --frozen-lockfile && npx --yes pnpm@11.5.2 build
+    # `npm start` runs app-server.js with NODE_ENV=production; it listens on Render's $PORT.
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: "22"

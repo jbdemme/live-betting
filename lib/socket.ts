@@ -11,7 +11,13 @@ import { useBettingStore } from "@/store/useBettingStore";
 
 export type AppSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
 
-export const SOCKET_URL = process.env.NEXT_PUBLIC_SOCKET_URL ?? "http://localhost:4000";
+/**
+ * Where the betting engine lives. In development it's the standalone `node server.js` on :4000;
+ * in production `app-server.js` serves it on the same origin as the page (undefined = same origin).
+ */
+export const SOCKET_URL: string | undefined =
+  process.env.NEXT_PUBLIC_SOCKET_URL ??
+  (process.env.NODE_ENV === "development" ? "http://localhost:4000" : undefined);
 const ACK_TIMEOUT_MS = 5000;
 
 let socket: AppSocket | null = null;
@@ -19,7 +25,8 @@ let socket: AppSocket | null = null;
 /** Lazily-created singleton so React StrictMode double-mounts don't open two connections. */
 export function getSocket(): AppSocket {
   if (!socket) {
-    socket = io(SOCKET_URL, { autoConnect: false, transports: ["websocket"] });
+    const opts = { autoConnect: false };
+    socket = SOCKET_URL ? io(SOCKET_URL, opts) : io(opts);
   }
   return socket;
 }

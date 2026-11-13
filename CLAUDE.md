@@ -42,3 +42,4 @@
 ## 5. Development Commands
 - Start Next.js App: `npm run dev` (Port 3000)
 - Start WebSocket Engine: `node server.js` (Port 4000)
+- Production (single port, used by the Render deploy in `render.yaml`): `pnpm build && pnpm start` — `app-server.js` serves Next.js and the Socket.io engine together on `$PORT`

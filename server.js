@@ -2,7 +2,8 @@
 /**
  * Real-time betting engine for live lecture micro-markets.
  *
- * Standalone Node.js HTTP server + Socket.io on port 4000.
+ * Runs standalone (`node server.js`, port 4000) for local dev, or inside the combined
+ * production server (`app-server.js`) that also serves the Next.js app on one port.
  * All state is in-memory: restarting the process resets every market and balance.
  *
  * Neutral Referee rules:
@@ -300,22 +301,35 @@ function settleMarket(m, winningOption) {
 // Server
 // ---------------------------------------------------------------------------
 
-const httpServer = http.createServer((req, res) => {
-  if (req.url === "/health") {
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ ok: true, users: users.size, markets: markets.size }));
-    return;
-  }
-  res.writeHead(404);
-  res.end();
-});
+/** @typedef {import("socket.io").Server<ClientToServerEvents, ServerToClientEvents, Record<string, never>, SocketData>} AppServer */
 
-/** @type {import("socket.io").Server<ClientToServerEvents, ServerToClientEvents, Record<string, never>, SocketData>} */
-const io = new Server(httpServer, {
-  cors: { origin: CLIENT_ORIGIN === "*" ? "*" : CLIENT_ORIGIN.split(",") },
-});
+/** Set by `attachEngine`; every broadcast goes through it. @type {AppServer} */
+let io;
 
-io.on("connection", (/** @type {AppSocket} */ socket) => {
+/**
+ * Serves `GET /health`. Returns true if it handled the request.
+ * @param {http.IncomingMessage} req
+ * @param {http.ServerResponse} res
+ */
+function handleHealth(req, res) {
+  if (req.url !== "/health") return false;
+  res.writeHead(200, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({ ok: true, users: users.size, markets: markets.size }));
+  return true;
+}
+
+/**
+ * Wire the betting engine onto a Socket.io server. Used both by the standalone
+ * engine below (`node server.js`) and by the combined production server (`app-server.js`).
+ * @param {AppServer} server
+ */
+function attachEngine(server) {
+  io = server;
+  io.on("connection", onConnection);
+}
+
+/** @param {AppSocket} socket */
+function onConnection(socket) {
   /** @returns {User | null} */
   const currentUser = () => {
     const id = socket.data.userId;
@@ -467,8 +481,23 @@ io.on("connection", (/** @type {AppSocket} */ socket) => {
     settleMarket(m, payload.winningOption);
     ack({ ok: true, data: null });
   });
-});
+}
 
-httpServer.listen(PORT, () => {
-  console.log(`[engine] Socket.io betting engine listening on http://localhost:${PORT}`);
-});
+module.exports = { attachEngine, handleHealth };
+
+// Standalone engine for local development: `node server.js` (port 4000, CORS for the dev app).
+if (require.main === module) {
+  const httpServer = http.createServer((req, res) => {
+    if (handleHealth(req, res)) return;
+    res.writeHead(404);
+    res.end();
+  });
+  attachEngine(
+    new Server(httpServer, {
+      cors: { origin: CLIENT_ORIGIN === "*" ? "*" : CLIENT_ORIGIN.split(",") },
+    }),
+  );
+  httpServer.listen(PORT, () => {
+    console.log(`[engine] Socket.io betting engine listening on http://localhost:${PORT}`);
+  });
+}

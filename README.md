@@ -21,6 +21,30 @@ Open several browser windows (or private windows) to play as different users.
 Set `NEXT_PUBLIC_SOCKET_URL` to point the client at another engine URL, and `CLIENT_ORIGIN`
 (comma-separated) on the server to restrict CORS.
 
+### Production (single port)
+
+```bash
+pnpm build
+```
+
+```bash
+pnpm start       # app-server.js: Next.js + Socket.io engine together on $PORT (default 3000)
+```
+
+In production the client connects to the engine on the same origin as the page.
+
+## Deploy (Render free tier)
+
+`render.yaml` is a Render Blueprint for one free web service that builds from `main`.
+
+1. Sign in at render.com with GitHub and allow Render access to this repo.
+2. **New → Blueprint**, pick this repo, and apply. Render builds and gives you an `onrender.com` URL.
+3. Every merge to `main` redeploys automatically.
+
+Free-tier caveats: the service sleeps after ~15 minutes without traffic and takes about a minute
+to wake on the next visit. Because all state is in memory, a sleep, restart or redeploy resets
+every balance and market.
+
 ## Neutral Referee rules
 
 - New users start with **1,000 pts**.

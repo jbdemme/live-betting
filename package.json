@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start",
+    "start": "NODE_ENV=production node app-server.js",
+    "engine": "node server.js",
     "lint": "eslint"
   },
   "dependencies": {
