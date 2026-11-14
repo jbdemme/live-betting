@@ -12,7 +12,7 @@ const http = require("node:http");
 // At runtime `require("next")` is the factory itself; its typings only describe the ESM default export.
 const next = /** @type {typeof import("next").default} */ (/** @type {unknown} */ (require("next")));
 const { Server } = require("socket.io");
-const { attachEngine, handleHealth } = require("./server");
+const { attachEngine, handleHealth, loadState, installShutdownHooks } = require("./server");
 
 const port = Number(process.env.PORT ?? 3000);
 const host = process.env.HOST ?? "0.0.0.0";
@@ -23,7 +23,7 @@ const handle = app.getRequestHandler();
 
 app
   .prepare()
-  .then(() => {
+  .then(async () => {
     const httpServer = http.createServer((req, res) => {
       if (handleHealth(req, res)) return;
       void handle(req, res);
@@ -31,6 +31,9 @@ app
 
     // Same origin as the page, so no CORS config is needed.
     attachEngine(new Server(httpServer));
+    // Restore saved users/markets (if DATABASE_URL is set) before accepting traffic.
+    await loadState();
+    installShutdownHooks(httpServer);
 
     httpServer.listen(port, host, () => {
       console.log(`[app] Next.js + betting engine listening on http://${host}:${port} (${dev ? "dev" : "production"})`);

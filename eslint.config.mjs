@@ -7,7 +7,7 @@ const eslintConfig = defineConfig([
   ...nextTs,
   // The Socket.io engine and production server are plain CommonJS Node scripts.
   {
-    files: ["server.js", "app-server.js"],
+    files: ["server.js", "app-server.js", "persistence.js"],
     rules: { "@typescript-eslint/no-require-imports": "off" },
   },
   // Override default ignores of eslint-config-next.

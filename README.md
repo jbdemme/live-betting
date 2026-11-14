@@ -41,9 +41,23 @@ In production the client connects to the engine on the same origin as the page.
 2. **New → Blueprint**, pick this repo, and apply. Render builds and gives you an `onrender.com` URL.
 3. Every merge to `main` redeploys automatically.
 
-Free-tier caveats: the service sleeps after ~15 minutes without traffic and takes about a minute
-to wake on the next visit. Because all state is in memory, a sleep, restart or redeploy resets
-every balance and market.
+Free-tier caveat: the service sleeps after ~15 minutes without traffic and takes about a minute
+to wake on the next visit.
+
+### Keeping data across deploys (Neon Postgres)
+
+Without a database, a sleep, restart or redeploy resets every balance and market. To keep them:
+
+1. Create a free project at neon.tech and copy its connection string (`postgresql://…`).
+2. In Render, open the service → **Environment** → add `DATABASE_URL` with that string → save.
+
+The engine still runs in memory; `persistence.js` writes a snapshot of all users, markets and bets
+to one Postgres row (within 2 seconds of any change, and once more on shutdown) and restores it on
+startup, including market timers. During a deploy the new instance takes ownership of the row, so the
+old one can't overwrite newer data; anything done on the old instance in the few seconds of the
+hand-over is dropped (bets are simply not charged). Only the 50 most recently resolved markets are kept.
+Locally, set `DATABASE_URL` too (append `?sslmode=disable` for a local Postgres without TLS), or leave
+it unset for in-memory only.
 
 ## Referee rules
 
