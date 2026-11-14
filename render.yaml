@@ -14,3 +14,7 @@ services:
     envVars:
       - key: NODE_VERSION
         value: "22"
+      # Neon Postgres connection string; keeps users, balances and markets across deploys.
+      # Not stored in the repo: set it in the Render dashboard (Environment tab).
+      - key: DATABASE_URL
+        sync: false

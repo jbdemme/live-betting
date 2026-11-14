@@ -20,11 +20,15 @@
  *
  * Handlers run synchronously (no awaits between validation and mutation), so every
  * state transition is atomic with respect to other socket events.
+ *
+ * Persistence: with DATABASE_URL set, the whole state is snapshotted to Postgres
+ * (debounced, plus a final flush on shutdown) and restored on startup — see persistence.js.
  */
 
 const http = require("node:http");
 const { Server } = require("socket.io");
 const { v4: uuidv4 } = require("uuid");
+const persistence = require("./persistence");
 
 /** @typedef {import("./lib/types").OptionId} OptionId */
 /** @typedef {import("./lib/types").MarketStatus} MarketStatus */
@@ -70,6 +74,11 @@ const REFEREE_BOUNTY_RATE = 0.05;
 const REFEREE_SETTLE_WINDOW_MS = 60_000;
 /** No-time-limit markets refund everyone if still unsettled this long after creation. */
 const NO_LIMIT_AUTO_VOID_MS = 3 * 60 * 60 * 1000;
+/** Debounce for writing snapshots to the database. */
+const SAVE_DEBOUNCE_MS = 2000;
+/** Only the most recent resolved markets are kept (in memory and in the snapshot). */
+const MAX_RESOLVED_KEPT = 50;
+const SNAPSHOT_VERSION = 1;
 const MIN_DURATION_SEC = 15;
 const MAX_DURATION_SEC = 60 * 60;
 const MAX_TITLE_LEN = 120;
@@ -266,6 +275,8 @@ function voidMarket(marketId, reason) {
 
   io.emit("MARKET_VOIDED", serializeMarket(m));
   scheduleLeaderboard();
+  pruneResolved();
+  markDirty();
   console.log(`[void] ${marketId} "${m.title}" — ${reason}`);
 }
 
@@ -277,10 +288,18 @@ function lockMarket(marketId) {
   m.status = "LOCKED";
   m.settleDeadline = Date.now() + REFEREE_SETTLE_WINDOW_MS;
   io.emit("MARKET_UPDATED", serializeMarket(m));
+  scheduleSettleDeadline(m);
+  markDirty();
+}
 
-  scheduleTimer(marketId, REFEREE_SETTLE_WINDOW_MS, () =>
-    voidMarket(marketId, `Referee did not settle within ${REFEREE_SETTLE_WINDOW_MS / 1000}s`),
-  );
+/** Auto-void the market at its settleDeadline (ruling window or no-limit cap). @param {MarketRecord} m */
+function scheduleSettleDeadline(m) {
+  if (m.settleDeadline === null) return;
+  const reason =
+    m.expiresAt === null
+      ? `Not settled within ${NO_LIMIT_AUTO_VOID_MS / 3_600_000} hours`
+      : `Referee did not settle within ${REFEREE_SETTLE_WINDOW_MS / 1000}s`;
+  scheduleTimer(m.id, m.settleDeadline - Date.now(), () => voidMarket(m.id, reason));
 }
 
 /**
@@ -324,7 +343,153 @@ function settleMarket(m, winningOption) {
 
   io.emit("MARKET_SETTLED", serializeMarket(m));
   scheduleLeaderboard();
+  pruneResolved();
+  markDirty();
   console.log(`[settle] ${m.id} "${m.title}" → ${winningOption}, pool ${totalPool}, bounty ${bounty}`);
+}
+
+// ---------------------------------------------------------------------------
+// Persistence (snapshot / restore)
+// ---------------------------------------------------------------------------
+
+/**
+ * @typedef {Object} Snapshot
+ * @property {number} version
+ * @property {number} savedAt
+ * @property {User[]} users
+ * @property {MarketRecord[]} markets
+ * @property {[string, PoolMap][]} pools
+ * @property {[string, [string, Stake][]][]} bets
+ */
+
+/** @returns {Snapshot} */
+function snapshot() {
+  return {
+    version: SNAPSHOT_VERSION,
+    savedAt: Date.now(),
+    users: [...users.values()],
+    markets: [...markets.values()],
+    pools: [...markets.keys()].map((id) => [id, getPools(id)]),
+    bets: [...bets].map(([id, byUser]) => [id, [...byUser]]),
+  };
+}
+
+/** Replace in-memory state with a stored snapshot. @param {Snapshot} snap */
+function restore(snap) {
+  users.clear();
+  markets.clear();
+  pools.clear();
+  bets.clear();
+  for (const u of snap.users) users.set(u.id, { ...u });
+  for (const m of snap.markets) markets.set(m.id, { ...m });
+  for (const [id, p] of snap.pools) pools.set(id, new Map(OPTION_IDS.map((o) => [o, p[o] ?? 0])));
+  for (const [id, byUser] of snap.bets) bets.set(id, new Map(byUser.map(([uid, st]) => [uid, { ...st }])));
+}
+
+/**
+ * Re-arm timers for unresolved markets after a restart. Downtime never eats a timed
+ * market's 60s ruling window (an expired window restarts); the no-limit 3h cap is absolute.
+ */
+function restoreTimers() {
+  const now = Date.now();
+  for (const m of markets.values()) {
+    if (m.status === "OPEN" && m.expiresAt !== null) {
+      // Overdue markets lock right away (with a fresh ruling window).
+      scheduleTimer(m.id, m.expiresAt - now, () => lockMarket(m.id));
+    } else if (m.status === "LOCKED" && m.expiresAt !== null) {
+      if (m.settleDeadline === null || m.settleDeadline < now) m.settleDeadline = now + REFEREE_SETTLE_WINDOW_MS;
+      scheduleSettleDeadline(m);
+    } else if (m.status === "OPEN" || m.status === "LOCKED") {
+      scheduleSettleDeadline(m); // no-limit market: overdue ones void right away
+    }
+  }
+}
+
+/** Drop all but the MAX_RESOLVED_KEPT most recently resolved markets. */
+function pruneResolved() {
+  const resolved = [...markets.values()]
+    .filter((m) => m.status === "SETTLED" || m.status === "VOID")
+    .sort((a, b) => (b.resolvedAt ?? 0) - (a.resolvedAt ?? 0));
+  for (const m of resolved.slice(MAX_RESOLVED_KEPT)) {
+    markets.delete(m.id);
+    pools.delete(m.id);
+    bets.delete(m.id);
+  }
+}
+
+let dirty = false;
+let saveTimer = /** @type {NodeJS.Timeout | null} */ (null);
+let savePromise = /** @type {Promise<unknown> | null} */ (null);
+
+/** Note that state changed; a snapshot is written within SAVE_DEBOUNCE_MS. */
+function markDirty() {
+  if (!persistence.enabled()) return;
+  dirty = true;
+  if (!saveTimer) saveTimer = setTimeout(() => void flush(), SAVE_DEBOUNCE_MS);
+}
+
+/** Write the current state now (waits for any save already in flight). */
+async function flush() {
+  if (saveTimer) clearTimeout(saveTimer);
+  saveTimer = null;
+  while (savePromise) await savePromise;
+  if (!dirty) return;
+  dirty = false;
+  savePromise = persistence
+    .save(snapshot())
+    .catch((/** @type {unknown} */ err) => {
+      console.error("[persist] save failed, will retry:", err);
+      markDirty();
+    })
+    .finally(() => {
+      savePromise = null;
+    });
+  await savePromise;
+}
+
+/**
+ * Load the stored snapshot (if persistence is enabled) and re-arm market timers.
+ * Call after `attachEngine` and before the HTTP server starts listening.
+ */
+async function loadState() {
+  if (!persistence.enabled()) {
+    console.log("[persist] DATABASE_URL not set: state is in-memory only");
+    return;
+  }
+  const snap = /** @type {Snapshot | null} */ (await persistence.claimAndLoad());
+  if (snap && snap.version === SNAPSHOT_VERSION) {
+    restore(snap);
+    console.log(`[persist] restored ${users.size} users and ${markets.size} markets`);
+  } else {
+    console.log("[persist] no saved state yet: starting fresh");
+  }
+  restoreTimers();
+  markDirty(); // persist any deadlines re-armed above
+}
+
+/**
+ * On SIGTERM/SIGINT (Render sends SIGTERM on deploys and spin-down): stop accepting
+ * connections, write a final snapshot, then exit.
+ * @param {http.Server} httpServer
+ */
+function installShutdownHooks(httpServer) {
+  let shuttingDown = false;
+  const shutdown = async (/** @type {string} */ signal) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`[engine] ${signal}: saving state and shutting down`);
+    httpServer.close();
+    for (const t of timers.values()) clearTimeout(t);
+    try {
+      await flush();
+      await persistence.close();
+    } catch (err) {
+      console.error("[persist] final save failed:", err);
+    }
+    process.exit(0);
+  };
+  process.on("SIGTERM", () => void shutdown("SIGTERM"));
+  process.on("SIGINT", () => void shutdown("SIGINT"));
 }
 
 // ---------------------------------------------------------------------------
@@ -399,6 +564,7 @@ function onConnection(socket) {
       },
     });
     scheduleLeaderboard();
+    markDirty();
   });
 
   socket.on("CREATE_MARKET", (payload, ack) => {
@@ -443,13 +609,9 @@ function onConnection(socket) {
     markets.set(m.id, m);
     pools.set(m.id, new Map(OPTION_IDS.map((id) => [id, 0])));
     bets.set(m.id, new Map());
-    if (durationSec === null) {
-      scheduleTimer(m.id, NO_LIMIT_AUTO_VOID_MS, () =>
-        voidMarket(m.id, `Not settled within ${NO_LIMIT_AUTO_VOID_MS / 3_600_000} hours`),
-      );
-    } else {
-      scheduleTimer(m.id, durationSec * 1000, () => lockMarket(m.id));
-    }
+    if (durationSec === null) scheduleSettleDeadline(m);
+    else scheduleTimer(m.id, durationSec * 1000, () => lockMarket(m.id));
+    markDirty();
 
     const wire = serializeMarket(m);
     io.emit("MARKET_CREATED", wire);
@@ -494,6 +656,7 @@ function onConnection(socket) {
       bettorCount: bettorCount(m.id),
     });
     scheduleLeaderboard();
+    markDirty();
     // Sync any other tabs of the same user.
     socket.to(userRoom(user.id)).emit("BALANCE_UPDATE", { balance: user.balance });
     ack({ ok: true, data: { stake: { ...stake }, balance: user.balance } });
@@ -512,6 +675,7 @@ function onConnection(socket) {
     // The auto-void timer set at creation keeps running; there's no extra settle rush.
     m.status = "LOCKED";
     io.emit("MARKET_UPDATED", serializeMarket(m));
+    markDirty();
     ack({ ok: true, data: null });
     console.log(`[close] ${m.id} "${m.title}" betting closed by referee`);
   });
@@ -531,7 +695,7 @@ function onConnection(socket) {
   });
 }
 
-module.exports = { attachEngine, handleHealth };
+module.exports = { attachEngine, handleHealth, loadState, installShutdownHooks };
 
 // Standalone engine for local development: `node server.js` (port 4000, CORS for the dev app).
 if (require.main === module) {
@@ -545,7 +709,15 @@ if (require.main === module) {
       cors: { origin: CLIENT_ORIGIN === "*" ? "*" : CLIENT_ORIGIN.split(",") },
     }),
   );
-  httpServer.listen(PORT, () => {
-    console.log(`[engine] Socket.io betting engine listening on http://localhost:${PORT}`);
-  });
+  loadState()
+    .then(() => {
+      installShutdownHooks(httpServer);
+      httpServer.listen(PORT, () => {
+        console.log(`[engine] Socket.io betting engine listening on http://localhost:${PORT}`);
+      });
+    })
+    .catch((/** @type {unknown} */ err) => {
+      console.error("[engine] failed to load state:", err);
+      process.exit(1);
+    });
 }

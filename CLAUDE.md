@@ -29,8 +29,10 @@
 - `markets`: List of active/settled markets with calculated live parimutuel odds.
 - `myBets`: Map of current user's active stakes per market option.
 
-### C. Persistent Storage (Future Scope / Not in v1)
-- *Note for v1*: No external SQL/NoSQL database or Redis instance is used. All session data resides in-memory on `server.js`. Restarting the server resets the lecture state.
+### C. Persistent Storage (optional snapshot to Postgres)
+- The in-memory maps in `server.js` remain the source of truth while running.
+- If `DATABASE_URL` is set (production: Neon Postgres), `persistence.js` saves a JSON snapshot of users, markets, pools and bets to a single `engine_state` row (debounced ~2s, plus a final flush on SIGTERM) and restores it on startup, re-arming market timers.
+- Without `DATABASE_URL`, nothing is persisted and restarting the server resets the lecture state.
 
 ## 4. Key Rules & Calculations
 - **Parimutuel Odds Formula**:
