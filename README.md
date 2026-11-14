@@ -63,7 +63,7 @@ it unset for in-memory only.
 
 - New users start with **1,000 pts**.
 - Whoever **creates** a market is its **Referee**. They can't bet on it, and only they can declare the outcome.
-- **Timed markets** (30s–10m): when the timer ends the market **locks**, and the Referee has **60s**
+- **Timed markets** (30s–10m): when the timer ends the market **locks**, and the Referee has **1 hour**
   to declare the winner, or it auto-voids.
 - **No-limit markets** (e.g. "Prof says 'essentially' 10+ times in the rest of the lecture"): betting
   stays open until the Referee taps **Close betting**; they then declare the outcome whenever it's known.

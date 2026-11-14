@@ -155,7 +155,7 @@ function CreateMarketForm({ onClose }: { onClose: () => void }) {
             you 5% of the pool.{" "}
             {durationSec === null
               ? "Betting stays open until you close it. If you don't declare the outcome within 3 hours, all wagers are refunded."
-              : "After betting closes you have 60s to declare it, or all wagers are refunded."}
+              : "After betting closes you have 1 hour to declare it, or all wagers are refunded."}
           </p>
         </fieldset>
 

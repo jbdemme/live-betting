@@ -45,3 +45,12 @@
 - Start Next.js App: `npm run dev` (Port 3000)
 - Start WebSocket Engine: `node server.js` (Port 4000)
 - Production (single port, used by the Render deploy in `render.yaml`): `pnpm build && pnpm start` — `app-server.js` serves Next.js and the Socket.io engine together on `$PORT`
+
+## 6. Implementation Notes (verified against the code — read before changing things)
+- **No rooms yet**: the spec above mentions `roomCode` / `LectureRoom` / `activeRoom`, but the code has a single global lobby. Every market is broadcast to everyone with `io.emit`; per-user messages go to the Socket.io room `user:<userId>`. The store has no `activeRoom`.
+- **Actual engine state** (`server.js`): `users: Map<userId, User>`, `markets: Map<id, MarketRecord>`, `pools: Map<id, Map<"A"|"B", number>>`, `bets: Map<id, Map<userId, Stake>>`, `timers: Map<id, Timeout>`. Markets are always binary (options `A`/`B`). Only the 50 most recent resolved markets are kept.
+- **Referee model**: the market creator is its Referee — the only one who can settle, can never bet on it, and gets a 5% bounty of the total pool minted on top of payouts. If nobody backed the winning option, settling voids (refunds) instead.
+- **Timers / limits** live in the Config block at the top of `server.js` (`REFEREE_SETTLE_WINDOW_MS` = 1 hour settle window after a timed market locks, `NO_LIMIT_AUTO_VOID_MS` = 3h cap for no-limit markets, `MIN/MAX_DURATION_SEC`). When you change one, also update the user-facing copy that hard-codes it: `components/CreateMarketModal.tsx`, `HOW_TO_PLAY.md`, `README.md` (and the `restoreTimers` doc comment). Countdowns in `components/MarketCard.tsx` are computed from `settleDeadline`, so they need no change.
+- **Wire contract**: all socket event names and payload types are in `lib/types.ts` (`ClientToServerEvents` / `ServerToClientEvents`); `server.js` is `// @ts-check` JS that imports those types via JSDoc. Client emits go through `lib/socket.ts` (5s ack timeout).
+- **Verification**: there is no test suite. Run `pnpm install`, then `npx next typegen` (otherwise `tsc` fails on the generated `LayoutProps` type), then `npx tsc --noEmit -p .` and `pnpm lint`. To smoke-test the engine, start `PORT=4123 node server.js` and drive it with `socket.io-client` (`REGISTER_USER` needs both `userId` and `username`; `CREATE_MARKET` accepts `durationSec` ≥ 15 or `null`).
+- `AGENTS.md` is (re)written by `next dev`; commit it as-is rather than editing it.
