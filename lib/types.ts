@@ -28,6 +28,7 @@ export interface Market {
   title: string;
   options: [MarketOption, MarketOption];
   status: MarketStatus;
+  /** The creator is the market's Referee: they settle it, can't bet on it, and earn the bounty. */
   creatorId: string;
   creatorName: string;
   createdAt: number;
@@ -35,8 +36,6 @@ export interface Market {
   expiresAt: number;
   /** Epoch ms by which the referee must settle (set when the market locks). */
   settleDeadline: number | null;
-  refereeId: string | null;
-  refereeName: string | null;
   pools: PoolMap;
   totalPool: number;
   odds: OddsMap;
@@ -73,10 +72,6 @@ export interface PlaceBetPayload {
   marketId: string;
   optionId: OptionId;
   amount: number;
-}
-
-export interface MarketIdPayload {
-  marketId: string;
 }
 
 export interface SettleMarketPayload {
@@ -116,13 +111,12 @@ export interface ClientToServerEvents {
   REGISTER_USER: (payload: RegisterUserPayload, ack: (res: Ack<SessionSnapshot>) => void) => void;
   CREATE_MARKET: (payload: CreateMarketPayload, ack: (res: Ack<Market>) => void) => void;
   PLACE_BET: (payload: PlaceBetPayload, ack: (res: Ack<{ stake: Stake; balance: number }>) => void) => void;
-  CLAIM_REFEREE: (payload: MarketIdPayload, ack: (res: Ack) => void) => void;
   SETTLE_MARKET: (payload: SettleMarketPayload, ack: (res: Ack) => void) => void;
 }
 
 export interface ServerToClientEvents {
   MARKET_CREATED: (market: Market) => void;
-  /** Any non-odds change to a market (referee assigned, locked). */
+  /** Any non-odds change to a market (e.g. locked). */
   MARKET_UPDATED: (market: Market) => void;
   ODDS_UPDATE: (payload: OddsUpdatePayload) => void;
   MARKET_SETTLED: (market: Market) => void;

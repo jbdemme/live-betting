@@ -45,13 +45,12 @@ Free-tier caveats: the service sleeps after ~15 minutes without traffic and take
 to wake on the next visit. Because all state is in memory, a sleep, restart or redeploy resets
 every balance and market.
 
-## Neutral Referee rules
+## Referee rules
 
 - New users start with **1,000 pts**.
-- Each market has at most one **Referee**, who alone may settle it. You can claim Referee only
-  while betting is open and only if you have **no bets** on that market. A Referee can't bet on it.
-- When the betting timer ends the market **locks**. With no Referee it **auto-voids**; otherwise the
-  Referee has **60s** to declare the winner, or it auto-voids.
+- Whoever **creates** a market is its **Referee**. They can't bet on it, and only they can declare the outcome.
+- When the betting timer ends the market **locks**, and the Referee has **60s** to declare the winner,
+  or it auto-voids. The Referee can also settle early, which ends betting immediately.
 - **Settle:** each winner gets `wager × (total pool / winning pool)` (rounded down). The Referee gets
   a bounty of **5% of the total pool**, minted on top (it doesn't reduce winners' payouts).
   If nobody backed the winning option, the market is voided instead.
@@ -63,7 +62,7 @@ every balance and market.
 | --- | --- |
 | `server.js` | Socket.io engine: users, markets, pools, bets, timers |
 | `lib/types.ts` | Shared wire types and typed Socket.io event maps |
-| `lib/socket.ts` | Socket singleton + client actions (create, bet, claim, settle) |
+| `lib/socket.ts` | Socket singleton + client actions (create, bet, settle) |
 | `hooks/useSocket.ts` | Connection lifecycle; mirrors server broadcasts into the store |
 | `store/useBettingStore.ts` | Zustand store: user, markets with live odds, my bets |
 | `components/` | `Navbar`, `MarketCard`, `CreateMarketModal`, `Toasts` |
@@ -72,7 +71,7 @@ every balance and market.
 ## Socket events
 
 Client → server (all acknowledged with `{ ok, data } | { ok: false, error }`):
-`REGISTER_USER`, `CREATE_MARKET`, `PLACE_BET`, `CLAIM_REFEREE`, `SETTLE_MARKET`.
+`REGISTER_USER`, `CREATE_MARKET`, `PLACE_BET`, `SETTLE_MARKET`.
 
 Server → client: `MARKET_CREATED`, `MARKET_UPDATED`, `ODDS_UPDATE` (on every bet),
 `MARKET_SETTLED`, `MARKET_VOIDED`, `BALANCE_UPDATE`, `PAYOUT`.

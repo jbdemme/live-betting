@@ -148,8 +148,8 @@ function CreateMarketForm({ onClose }: { onClose: () => void }) {
             ))}
           </div>
           <p className="text-xs text-zinc-500">
-            A Referee must claim the market before betting closes, then has 60s to declare the winner — otherwise all
-            wagers are refunded.
+            You&apos;re the Referee: you can&apos;t bet on this market, and you declare the outcome. After betting
+            closes you have 60s to do it, or all wagers are refunded. Settling earns you 5% of the pool.
           </p>
         </fieldset>
 

@@ -2,7 +2,7 @@
 
 import { useState, type ReactNode } from "react";
 import type { Ack, Market, OptionId } from "@/lib/types";
-import { claimReferee, placeBet, settleMarket } from "@/lib/socket";
+import { placeBet, settleMarket } from "@/lib/socket";
 import { EMPTY_STAKE, stakeTotal, useBettingStore } from "@/store/useBettingStore";
 import { useServerNow } from "@/hooks/useNow";
 import { formatCountdown, formatOdds, formatPts, optionLabel, settledPayout } from "@/lib/format";
@@ -40,7 +40,8 @@ export default function MarketCard({ market }: { market: Market }) {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const isReferee = userId !== null && market.refereeId === userId;
+  // The creator is the Referee: they settle the market and can never bet on it.
+  const isReferee = userId !== null && market.creatorId === userId;
   const myTotal = stakeTotal(stake);
   const bettingOpen = market.status === "OPEN" && now < market.expiresAt;
   const resolved = market.status === "SETTLED" || market.status === "VOID";
@@ -69,7 +70,7 @@ export default function MarketCard({ market }: { market: Market }) {
               {market.status}
             </span>
             <span className="truncate text-xs text-zinc-500">
-              by {market.creatorName} · {market.bettorCount} {market.bettorCount === 1 ? "bettor" : "bettors"}
+              Referee {isReferee ? "you" : market.creatorName} · {market.bettorCount} {market.bettorCount === 1 ? "bettor" : "bettors"}
             </span>
           </div>
           <h3 className="text-base font-semibold leading-snug text-zinc-100 sm:text-lg">{market.title}</h3>
@@ -107,7 +108,7 @@ export default function MarketCard({ market }: { market: Market }) {
 
       {/* Quick bets */}
       {bettingOpen && !isReferee && (
-        <div className="mt-4 grid gap-2 sm:grid-cols-2">
+        <div className="mt-4 grid gap-2">
           {(["A", "B"] as const).map((id) => (
             <div key={id} className="flex items-center gap-1.5">
               <span className={`w-16 shrink-0 truncate text-xs font-medium ${OPTION_STYLE[id].text}`}>
@@ -137,10 +138,7 @@ export default function MarketCard({ market }: { market: Market }) {
         market={market}
         now={now}
         isReferee={isReferee}
-        hasBets={myTotal > 0}
-        bettingOpen={bettingOpen}
         pending={pending}
-        onClaim={() => run(() => claimReferee(market.id))}
         onSettle={(winner) => run(() => settleMarket(market.id, winner))}
       />
 
@@ -213,20 +211,17 @@ interface RefereePanelProps {
   market: Market;
   now: number;
   isReferee: boolean;
-  hasBets: boolean;
-  bettingOpen: boolean;
   pending: boolean;
-  onClaim: () => void;
   onSettle: (winner: OptionId) => void;
 }
 
-function RefereePanel({ market, now, isReferee, hasBets, bettingOpen, pending, onClaim, onSettle }: RefereePanelProps) {
+function RefereePanel({ market, now, isReferee, pending, onSettle }: RefereePanelProps) {
   const [selected, setSelected] = useState<OptionId | null>(null);
 
   if (market.status === "SETTLED") {
     return (
       <div className="mt-4 border-t border-zinc-800 pt-3 text-xs text-zinc-400">
-        Settled by <span className="font-medium text-zinc-200">{market.refereeName}</span> · winner{" "}
+        Settled by referee <span className="font-medium text-zinc-200">{market.creatorName}</span> · winner{" "}
         <span className={`font-semibold ${market.winningOption ? OPTION_STYLE[market.winningOption].text : ""}`}>
           {market.winningOption ? optionLabel(market, market.winningOption) : "—"}
         </span>{" "}
@@ -243,44 +238,20 @@ function RefereePanel({ market, now, isReferee, hasBets, bettingOpen, pending, o
     );
   }
 
-  // Active market, no referee yet.
-  if (!market.refereeId) {
-    return (
-      <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-zinc-800 pt-3">
-        <span className="flex items-center gap-1.5 text-xs text-amber-300/90">
-          <span className="h-1.5 w-1.5 rounded-full bg-amber-400" />
-          No referee — market voids at close without one
-        </span>
-        {hasBets ? (
-          <span className="text-xs text-zinc-500">You&apos;ve bet here, so you can&apos;t referee</span>
-        ) : (
-          <button
-            type="button"
-            disabled={pending || !bettingOpen}
-            onClick={onClaim}
-            className="rounded-lg border border-amber-400/40 bg-amber-400/10 px-3 py-1.5 text-xs font-semibold text-amber-200 transition hover:bg-amber-400/20 disabled:opacity-40"
-          >
-            Claim Referee (+5% Bounty)
-          </button>
-        )}
-      </div>
-    );
-  }
-
-  // Someone else is referee.
+  // Someone else created this market, so they referee it.
   if (!isReferee) {
     return (
       <div className="mt-4 flex items-center gap-2 border-t border-zinc-800 pt-3 text-xs text-zinc-400">
         <span className="rounded-md border border-zinc-700 bg-zinc-800 px-1.5 py-0.5 font-semibold text-zinc-300">
-          Referee Assigned
+          Referee
         </span>
-        <span className="truncate">{market.refereeName}</span>
+        <span className="truncate">{market.creatorName}</span>
         {market.status === "LOCKED" && <span className="ml-auto text-amber-300/80">awaiting ruling…</span>}
       </div>
     );
   }
 
-  // You are the referee.
+  // You created this market, so you referee it.
   const bounty = Math.round(market.totalPool * 0.05);
   return (
     <div className="mt-4 rounded-xl border border-amber-400/30 bg-amber-400/5 p-3">
@@ -288,12 +259,12 @@ function RefereePanel({ market, now, isReferee, hasBets, bettingOpen, pending, o
         <span className="rounded-md bg-amber-400 px-1.5 py-0.5 text-[10px] font-black tracking-wider text-zinc-950">
           YOU ARE REFEREE
         </span>
-        <span className="font-mono text-xs text-amber-200/80">bounty ≈ +{formatPts(bounty)} pts</span>
+        <span className="font-mono text-xs text-amber-200/80">your bounty ≈ +{formatPts(bounty)} pts</span>
       </div>
       <p className="mt-2 text-xs text-zinc-400">
         {market.status === "LOCKED" && market.settleDeadline
           ? `Betting closed. Declare the outcome within ${formatCountdown(market.settleDeadline - now)} or the market is voided.`
-          : "You can't bet on this market. Declare the outcome once it happens — settling ends betting immediately."}
+          : "You created this market, so you can't bet on it. Declare the outcome once it happens — settling ends betting immediately."}
       </p>
       <div className="mt-2 flex gap-2">
         {(["A", "B"] as const).map((id) => (
