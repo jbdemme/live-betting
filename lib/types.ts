@@ -85,10 +85,24 @@ export interface SettleMarketPayload {
 
 export type Ack<T = null> = { ok: true; data: T } | { ok: false; error: string };
 
+export interface LeaderboardEntry {
+  userId: string;
+  username: string;
+  /** Spendable points. */
+  balance: number;
+  /** Points wagered in markets that are still OPEN or LOCKED. */
+  atStake: number;
+  /** Ranking score: balance + atStake. */
+  total: number;
+  online: boolean;
+}
+
 export interface SessionSnapshot {
   user: User;
   markets: Market[];
   myBets: MyBets;
+  /** All users, best first. */
+  leaderboard: LeaderboardEntry[];
   serverNow: number;
 }
 
@@ -129,4 +143,6 @@ export interface ServerToClientEvents {
   MARKET_VOIDED: (market: Market) => void;
   BALANCE_UPDATE: (payload: { balance: number }) => void;
   PAYOUT: (notice: PayoutNotice) => void;
+  /** Full ranking, best first; sent (debounced) whenever totals or online status change. */
+  LEADERBOARD_UPDATE: (entries: LeaderboardEntry[]) => void;
 }

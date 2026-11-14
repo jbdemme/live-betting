@@ -6,6 +6,7 @@ import Navbar from "@/components/Navbar";
 import MarketCard from "@/components/MarketCard";
 import CreateMarketModal from "@/components/CreateMarketModal";
 import Toasts from "@/components/Toasts";
+import Leaderboard from "@/components/Leaderboard";
 import { loadIdentity, saveIdentity, useSocket } from "@/hooks/useSocket";
 import { SOCKET_URL } from "@/lib/socket";
 import { selectActiveMarkets, selectResolvedMarkets, useBettingStore } from "@/store/useBettingStore";
@@ -15,6 +16,8 @@ export default function Home() {
   const identityLoaded = useBettingStore((s) => s.identityLoaded);
   const setIdentity = useBettingStore((s) => s.setIdentity);
   const [createOpen, setCreateOpen] = useState(false);
+  /** Phone/tablet only: which pane is visible. On wide screens both show side by side. */
+  const [tab, setTab] = useState<"markets" | "leaderboard">("markets");
 
   // Hydrate identity from localStorage after mount (not available during SSR).
   useEffect(() => {
@@ -31,8 +34,31 @@ export default function Home() {
   return (
     <>
       <Navbar onCreateMarket={() => setCreateOpen(true)} />
-      <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-6">
-        <MarketFeed onCreate={() => setCreateOpen(true)} />
+      <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-6">
+        <div className="mb-4 grid grid-cols-2 rounded-lg border border-zinc-800 bg-zinc-900 p-1 lg:hidden" role="tablist">
+          {(["markets", "leaderboard"] as const).map((t) => (
+            <button
+              key={t}
+              type="button"
+              role="tab"
+              aria-selected={tab === t}
+              onClick={() => setTab(t)}
+              className={`rounded-md py-1.5 text-sm font-semibold capitalize transition ${
+                tab === t ? "bg-zinc-700 text-zinc-100" : "text-zinc-400 hover:text-zinc-200"
+              }`}
+            >
+              {t}
+            </button>
+          ))}
+        </div>
+        <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_300px] lg:items-start">
+          <div className={tab === "markets" ? "" : "hidden lg:block"}>
+            <MarketFeed onCreate={() => setCreateOpen(true)} />
+          </div>
+          <aside className={`lg:sticky lg:top-20 ${tab === "leaderboard" ? "" : "hidden lg:block"}`}>
+            <Leaderboard />
+          </aside>
+        </div>
       </main>
       <CreateMarketModal open={createOpen} onClose={closeCreate} />
       <Toasts />
@@ -79,7 +105,7 @@ function MarketFeed({ onCreate }: { onCreate: () => void }) {
             </button>
           </div>
         ) : (
-          <div className="grid gap-4 lg:grid-cols-2">
+          <div className="grid gap-4 xl:grid-cols-2">
             {active.map((m) => (
               <MarketCard key={m.id} market={m} />
             ))}
@@ -90,7 +116,7 @@ function MarketFeed({ onCreate }: { onCreate: () => void }) {
       {resolved.length > 0 && (
         <section>
           <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-zinc-400">Recently resolved</h2>
-          <div className="grid gap-4 lg:grid-cols-2">
+          <div className="grid gap-4 xl:grid-cols-2">
             {resolved.map((m) => (
               <MarketCard key={m.id} market={m} />
             ))}

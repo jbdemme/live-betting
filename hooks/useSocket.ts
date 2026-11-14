@@ -73,6 +73,7 @@ export function useSocket(identity: Identity | null): void {
     socket.on("ODDS_UPDATE", (u) => store().applyOdds(u));
     socket.on("BALANCE_UPDATE", ({ balance }) => store().setBalance(balance));
     socket.on("PAYOUT", (notice) => store().pushToast(notice));
+    socket.on("LEADERBOARD_UPDATE", (entries) => store().setLeaderboard(entries));
 
     store().setConnection("connecting");
     if (socket.connected) register();
@@ -89,6 +90,7 @@ export function useSocket(identity: Identity | null): void {
       socket.off("ODDS_UPDATE");
       socket.off("BALANCE_UPDATE");
       socket.off("PAYOUT");
+      socket.off("LEADERBOARD_UPDATE");
       socket.disconnect();
     };
   }, [identity]);

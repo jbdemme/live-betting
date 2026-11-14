@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type {
+  LeaderboardEntry,
   Market,
   MyBets,
   OddsUpdatePayload,
@@ -30,6 +31,8 @@ interface BettingState {
   /** Markets keyed by id (live parimutuel odds are carried on each market). */
   markets: Record<string, Market>;
   myBets: MyBets;
+  /** All users ranked by balance + points at stake, best first. */
+  leaderboard: LeaderboardEntry[];
   /** serverNow - clientNow, used to render timers against the server clock. */
   clockOffset: number;
   toasts: Toast[];
@@ -41,6 +44,7 @@ interface BettingState {
   applyOdds: (update: OddsUpdatePayload) => void;
   setBalance: (balance: number) => void;
   setStake: (marketId: string, stake: Stake) => void;
+  setLeaderboard: (entries: LeaderboardEntry[]) => void;
   pushToast: (notice: PayoutNotice) => void;
   dismissToast: (id: string) => void;
 }
@@ -54,6 +58,7 @@ export const useBettingStore = create<BettingState>()((set) => ({
   currentUser: null,
   markets: {},
   myBets: {},
+  leaderboard: [],
   clockOffset: 0,
   toasts: [],
 
@@ -61,11 +66,12 @@ export const useBettingStore = create<BettingState>()((set) => ({
 
   setConnection: (connection) => set({ connection }),
 
-  applySession: ({ user, markets, myBets, serverNow }) =>
+  applySession: ({ user, markets, myBets, leaderboard, serverNow }) =>
     set({
       currentUser: user,
       markets: Object.fromEntries(markets.map((m) => [m.id, m])),
       myBets,
+      leaderboard,
       clockOffset: serverNow - Date.now(),
     }),
 
@@ -84,6 +90,8 @@ export const useBettingStore = create<BettingState>()((set) => ({
     set((s) => (s.currentUser ? { currentUser: { ...s.currentUser, balance } } : s)),
 
   setStake: (marketId, stake) => set((s) => ({ myBets: { ...s.myBets, [marketId]: stake } })),
+
+  setLeaderboard: (leaderboard) => set({ leaderboard }),
 
   pushToast: (notice) =>
     set((s) => ({ toasts: [...s.toasts, { ...notice, id: `t${++toastSeq}` }].slice(-5) })),
