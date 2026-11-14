@@ -9,8 +9,11 @@
  * Referee rules:
  *  - The user who creates a market is its Referee and the only one who may settle it.
  *  - The Referee may never bet on their own market.
- *  - When betting closes the market LOCKS, and the Referee has REFEREE_SETTLE_WINDOW_MS
- *    to declare the outcome, or the market auto-VOIDs. They may also settle early, while OPEN.
+ *  - Timed markets: when betting closes the market LOCKS, and the Referee has
+ *    REFEREE_SETTLE_WINDOW_MS to declare the outcome, or the market auto-VOIDs.
+ *  - No-time-limit markets: betting stays OPEN until the Referee closes it (LOCKED) or settles.
+ *    If unsettled NO_LIMIT_AUTO_VOID_MS after creation, the market auto-VOIDs.
+ *  - The Referee may settle at any time while OPEN or LOCKED.
  *  - Settling pays winners `wager * (totalPool / winningPool)` and mints a 5% bounty
  *    (of the total pool) for the Referee on top.
  *  - VOID refunds every wager in full.
@@ -47,7 +50,7 @@ const { v4: uuidv4 } = require("uuid");
  * @property {MarketStatus} status
  * @property {string} creatorId
  * @property {number} createdAt
- * @property {number} expiresAt
+ * @property {number | null} expiresAt
  * @property {number | null} settleDeadline
  * @property {OptionId | null} winningOption
  * @property {number | null} refereeBounty
@@ -64,6 +67,8 @@ const CLIENT_ORIGIN = process.env.CLIENT_ORIGIN ?? "*";
 const STARTING_BALANCE = 1000;
 const REFEREE_BOUNTY_RATE = 0.05;
 const REFEREE_SETTLE_WINDOW_MS = 60_000;
+/** No-time-limit markets refund everyone if still unsettled this long after creation. */
+const NO_LIMIT_AUTO_VOID_MS = 3 * 60 * 60 * 1000;
 const MIN_DURATION_SEC = 15;
 const MAX_DURATION_SEC = 60 * 60;
 const MAX_TITLE_LEN = 120;
@@ -226,7 +231,7 @@ function voidMarket(marketId, reason) {
   console.log(`[void] ${marketId} "${m.title}" — ${reason}`);
 }
 
-/** Betting window closed: lock and start the Referee's settle window. @param {string} marketId */
+/** Timed betting window closed: lock and start the Referee's settle window. @param {string} marketId */
 function lockMarket(marketId) {
   const m = markets.get(marketId);
   if (!m || m.status !== "OPEN") return;
@@ -357,12 +362,16 @@ function onConnection(socket) {
     const title = cleanString(payload?.title, MAX_TITLE_LEN);
     const optionA = cleanString(payload?.optionA, MAX_OPTION_LEN);
     const optionB = cleanString(payload?.optionB, MAX_OPTION_LEN);
-    const durationSec = payload?.durationSec;
+    // null = no time limit.
+    const durationSec = payload?.durationSec ?? null;
     if (!title) return ack({ ok: false, error: `Title is required (max ${MAX_TITLE_LEN} chars)` });
     if (!optionA || !optionB) return ack({ ok: false, error: `Both option labels are required (max ${MAX_OPTION_LEN} chars)` });
     if (optionA.toLowerCase() === optionB.toLowerCase()) return ack({ ok: false, error: "Options must differ" });
-    if (!Number.isInteger(durationSec) || durationSec < MIN_DURATION_SEC || durationSec > MAX_DURATION_SEC) {
-      return ack({ ok: false, error: `Duration must be ${MIN_DURATION_SEC}–${MAX_DURATION_SEC} seconds` });
+    if (
+      durationSec !== null &&
+      (!Number.isInteger(durationSec) || durationSec < MIN_DURATION_SEC || durationSec > MAX_DURATION_SEC)
+    ) {
+      return ack({ ok: false, error: `Duration must be ${MIN_DURATION_SEC}–${MAX_DURATION_SEC} seconds, or no limit` });
     }
 
     const now = Date.now();
@@ -377,8 +386,8 @@ function onConnection(socket) {
       status: "OPEN",
       creatorId: user.id,
       createdAt: now,
-      expiresAt: now + durationSec * 1000,
-      settleDeadline: null,
+      expiresAt: durationSec === null ? null : now + durationSec * 1000,
+      settleDeadline: durationSec === null ? now + NO_LIMIT_AUTO_VOID_MS : null,
       winningOption: null,
       refereeBounty: null,
       voidReason: null,
@@ -388,12 +397,18 @@ function onConnection(socket) {
     markets.set(m.id, m);
     pools.set(m.id, new Map(OPTION_IDS.map((id) => [id, 0])));
     bets.set(m.id, new Map());
-    scheduleTimer(m.id, durationSec * 1000, () => lockMarket(m.id));
+    if (durationSec === null) {
+      scheduleTimer(m.id, NO_LIMIT_AUTO_VOID_MS, () =>
+        voidMarket(m.id, `Not settled within ${NO_LIMIT_AUTO_VOID_MS / 3_600_000} hours`),
+      );
+    } else {
+      scheduleTimer(m.id, durationSec * 1000, () => lockMarket(m.id));
+    }
 
     const wire = serializeMarket(m);
     io.emit("MARKET_CREATED", wire);
     ack({ ok: true, data: wire });
-    console.log(`[create] ${m.id} "${title}" by ${user.username}, ${durationSec}s`);
+    console.log(`[create] ${m.id} "${title}" by ${user.username}, ${durationSec === null ? "no limit" : `${durationSec}s`}`);
   });
 
   socket.on("PLACE_BET", (payload, ack) => {
@@ -406,7 +421,9 @@ function onConnection(socket) {
     const m = typeof marketId === "string" ? markets.get(marketId) : undefined;
 
     if (!m) return ack({ ok: false, error: "Market not found" });
-    if (m.status !== "OPEN" || Date.now() >= m.expiresAt) return ack({ ok: false, error: "Betting is closed" });
+    if (m.status !== "OPEN" || (m.expiresAt !== null && Date.now() >= m.expiresAt)) {
+      return ack({ ok: false, error: "Betting is closed" });
+    }
     if (m.creatorId === user.id) return ack({ ok: false, error: "You can't bet on a market you referee" });
     if (!isOptionId(optionId)) return ack({ ok: false, error: "Invalid option" });
     if (!Number.isInteger(amount) || amount <= 0) return ack({ ok: false, error: "Amount must be a positive integer" });
@@ -433,6 +450,23 @@ function onConnection(socket) {
     // Sync any other tabs of the same user.
     socket.to(userRoom(user.id)).emit("BALANCE_UPDATE", { balance: user.balance });
     ack({ ok: true, data: { stake: { ...stake }, balance: user.balance } });
+  });
+
+  socket.on("CLOSE_BETTING", (payload, ack) => {
+    const user = currentUser();
+    if (!user) return ack({ ok: false, error: "Register first" });
+
+    const m = typeof payload?.marketId === "string" ? markets.get(payload.marketId) : undefined;
+    if (!m) return ack({ ok: false, error: "Market not found" });
+    if (m.creatorId !== user.id) return ack({ ok: false, error: "Only the market's creator (its Referee) can close betting" });
+    if (m.expiresAt !== null) return ack({ ok: false, error: "Timed markets close automatically" });
+    if (m.status !== "OPEN") return ack({ ok: false, error: "Betting is already closed" });
+
+    // The auto-void timer set at creation keeps running; there's no extra settle rush.
+    m.status = "LOCKED";
+    io.emit("MARKET_UPDATED", serializeMarket(m));
+    ack({ ok: true, data: null });
+    console.log(`[close] ${m.id} "${m.title}" betting closed by referee`);
   });
 
   socket.on("SETTLE_MARKET", (payload, ack) => {

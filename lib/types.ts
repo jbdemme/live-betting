@@ -32,9 +32,12 @@ export interface Market {
   creatorId: string;
   creatorName: string;
   createdAt: number;
-  /** Epoch ms when betting locks. */
-  expiresAt: number;
-  /** Epoch ms by which the referee must settle (set when the market locks). */
+  /** Epoch ms when betting locks; null for a no-time-limit market (the creator closes betting). */
+  expiresAt: number | null;
+  /**
+   * Epoch ms by which the referee must settle or the market auto-voids.
+   * Timed markets: set when betting locks. No-time-limit markets: set at creation.
+   */
   settleDeadline: number | null;
   pools: PoolMap;
   totalPool: number;
@@ -65,7 +68,8 @@ export interface CreateMarketPayload {
   title: string;
   optionA: string;
   optionB: string;
-  durationSec: number;
+  /** Betting window in seconds, or null for no time limit. */
+  durationSec: number | null;
 }
 
 export interface PlaceBetPayload {
@@ -111,6 +115,8 @@ export interface ClientToServerEvents {
   REGISTER_USER: (payload: RegisterUserPayload, ack: (res: Ack<SessionSnapshot>) => void) => void;
   CREATE_MARKET: (payload: CreateMarketPayload, ack: (res: Ack<Market>) => void) => void;
   PLACE_BET: (payload: PlaceBetPayload, ack: (res: Ack<{ stake: Stake; balance: number }>) => void) => void;
+  /** Creator-only, no-time-limit markets: stop betting before declaring the outcome. */
+  CLOSE_BETTING: (payload: { marketId: string }, ack: (res: Ack) => void) => void;
   SETTLE_MARKET: (payload: SettleMarketPayload, ack: (res: Ack) => void) => void;
 }
 

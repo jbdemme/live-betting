@@ -49,8 +49,12 @@ every balance and market.
 
 - New users start with **1,000 pts**.
 - Whoever **creates** a market is its **Referee**. They can't bet on it, and only they can declare the outcome.
-- When the betting timer ends the market **locks**, and the Referee has **60s** to declare the winner,
-  or it auto-voids. The Referee can also settle early, which ends betting immediately.
+- **Timed markets** (30s–10m): when the timer ends the market **locks**, and the Referee has **60s**
+  to declare the winner, or it auto-voids.
+- **No-limit markets** (e.g. "Prof says 'essentially' 10+ times in the rest of the lecture"): betting
+  stays open until the Referee taps **Close betting**; they then declare the outcome whenever it's known.
+  If it isn't settled within **3 hours** of creation, it auto-voids.
+- The Referee can settle at any time, which also ends betting immediately.
 - **Settle:** each winner gets `wager × (total pool / winning pool)` (rounded down). The Referee gets
   a bounty of **5% of the total pool**, minted on top (it doesn't reduce winners' payouts).
   If nobody backed the winning option, the market is voided instead.
@@ -62,7 +66,7 @@ every balance and market.
 | --- | --- |
 | `server.js` | Socket.io engine: users, markets, pools, bets, timers |
 | `lib/types.ts` | Shared wire types and typed Socket.io event maps |
-| `lib/socket.ts` | Socket singleton + client actions (create, bet, settle) |
+| `lib/socket.ts` | Socket singleton + client actions (create, bet, close betting, settle) |
 | `hooks/useSocket.ts` | Connection lifecycle; mirrors server broadcasts into the store |
 | `store/useBettingStore.ts` | Zustand store: user, markets with live odds, my bets |
 | `components/` | `Navbar`, `MarketCard`, `CreateMarketModal`, `Toasts` |
@@ -71,7 +75,7 @@ every balance and market.
 ## Socket events
 
 Client → server (all acknowledged with `{ ok, data } | { ok: false, error }`):
-`REGISTER_USER`, `CREATE_MARKET`, `PLACE_BET`, `SETTLE_MARKET`.
+`REGISTER_USER`, `CREATE_MARKET`, `PLACE_BET`, `CLOSE_BETTING`, `SETTLE_MARKET`.
 
 Server → client: `MARKET_CREATED`, `MARKET_UPDATED`, `ODDS_UPDATE` (on every bet),
 `MARKET_SETTLED`, `MARKET_VOIDED`, `BALANCE_UPDATE`, `PAYOUT`.

@@ -101,11 +101,15 @@ export const stakeTotal = (stake: Stake): number => stake.A + stake.B;
 
 const isActive = (m: Market): boolean => m.status === "OPEN" || m.status === "LOCKED";
 
+/** Next deadline that matters for a market (no-time-limit markets fall back to their auto-void time). */
+const nextDeadline = (m: Market): number =>
+  (m.status === "OPEN" ? m.expiresAt : null) ?? m.settleDeadline ?? Number.MAX_SAFE_INTEGER;
+
 /** Active markets, soonest deadline first. */
 export function selectActiveMarkets(markets: Record<string, Market>): Market[] {
   return Object.values(markets)
     .filter(isActive)
-    .sort((a, b) => (a.settleDeadline ?? a.expiresAt) - (b.settleDeadline ?? b.expiresAt));
+    .sort((a, b) => nextDeadline(a) - nextDeadline(b));
 }
 
 /** Settled/voided markets, most recent first. */
