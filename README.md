@@ -1,7 +1,7 @@
 # Lecture Bets — Live Micro-Betting (v1 prototype)
 
 Students bet play-money points on live lecture micro-events using parimutuel pools.
-See `CLAUDE.md` for the product and domain spec.
+New players: see [How to Play](HOW_TO_PLAY.md). See `CLAUDE.md` for the product and domain spec.
 
 ## Run
 
@@ -69,7 +69,7 @@ every balance and market.
 | `lib/socket.ts` | Socket singleton + client actions (create, bet, close betting, settle) |
 | `hooks/useSocket.ts` | Connection lifecycle; mirrors server broadcasts into the store |
 | `store/useBettingStore.ts` | Zustand store: user, markets with live odds, my bets |
-| `components/` | `Navbar`, `MarketCard`, `CreateMarketModal`, `Toasts` |
+| `components/` | `Navbar`, `MarketCard`, `CreateMarketModal`, `Leaderboard`, `Toasts` |
 | `app/page.tsx` | Join screen + feed of live and recently resolved markets |
 
 ## Socket events
@@ -78,4 +78,5 @@ Client → server (all acknowledged with `{ ok, data } | { ok: false, error }`):
 `REGISTER_USER`, `CREATE_MARKET`, `PLACE_BET`, `CLOSE_BETTING`, `SETTLE_MARKET`.
 
 Server → client: `MARKET_CREATED`, `MARKET_UPDATED`, `ODDS_UPDATE` (on every bet),
-`MARKET_SETTLED`, `MARKET_VOIDED`, `BALANCE_UPDATE`, `PAYOUT`.
+`MARKET_SETTLED`, `MARKET_VOIDED`, `BALANCE_UPDATE`, `PAYOUT`, `LEADERBOARD_UPDATE`
+(debounced; all users ranked by balance + points in open bets).

@@ -23,7 +23,7 @@ export default function Navbar({ onCreateMarket }: NavbarProps) {
 
   return (
     <header className="sticky top-0 z-30 border-b border-zinc-800 bg-zinc-950/85 backdrop-blur">
-      <nav className="mx-auto flex max-w-5xl items-center gap-3 px-4 py-3">
+      <nav className="mx-auto flex max-w-6xl items-center gap-3 px-4 py-3">
         <div className="flex items-center gap-2">
           <span className="grid h-8 w-8 place-items-center rounded-lg bg-indigo-500 text-sm font-black text-white">
             LB

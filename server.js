@@ -36,6 +36,7 @@ const { v4: uuidv4 } = require("uuid");
 /** @typedef {import("./lib/types").OddsMap} OddsMap */
 /** @typedef {import("./lib/types").PoolMap} PoolMap */
 /** @typedef {import("./lib/types").PayoutNotice} PayoutNotice */
+/** @typedef {import("./lib/types").LeaderboardEntry} LeaderboardEntry */
 /** @typedef {import("./lib/types").ClientToServerEvents} ClientToServerEvents */
 /** @typedef {import("./lib/types").ServerToClientEvents} ServerToClientEvents */
 /** @typedef {{ userId?: string }} SocketData */
@@ -196,6 +197,42 @@ function creditUser(userId, delta) {
   io.to(userRoom(userId)).emit("BALANCE_UPDATE", { balance: user.balance });
 }
 
+/** All users ranked by balance + points at stake in unresolved markets. @returns {LeaderboardEntry[]} */
+function buildLeaderboard() {
+  /** @type {Map<string, number>} */
+  const atStake = new Map();
+  for (const [marketId, byUser] of bets) {
+    const status = markets.get(marketId)?.status;
+    if (status !== "OPEN" && status !== "LOCKED") continue;
+    for (const [userId, stake] of byUser) {
+      atStake.set(userId, (atStake.get(userId) ?? 0) + stake.A + stake.B);
+    }
+  }
+  return [...users.values()]
+    .map((u) => {
+      const staked = atStake.get(u.id) ?? 0;
+      return {
+        userId: u.id,
+        username: u.username,
+        balance: u.balance,
+        atStake: staked,
+        total: u.balance + staked,
+        online: (io.sockets.adapter.rooms.get(userRoom(u.id))?.size ?? 0) > 0,
+      };
+    })
+    .sort((a, b) => b.total - a.total || a.username.localeCompare(b.username));
+}
+
+/** Coalesces bursts of changes (e.g. a settlement paying many users) into one broadcast. */
+let leaderboardTimer = /** @type {NodeJS.Timeout | null} */ (null);
+function scheduleLeaderboard() {
+  if (leaderboardTimer) return;
+  leaderboardTimer = setTimeout(() => {
+    leaderboardTimer = null;
+    io.emit("LEADERBOARD_UPDATE", buildLeaderboard());
+  }, 250);
+}
+
 /** @param {string} userId @param {PayoutNotice} notice */
 function notify(userId, notice) {
   io.to(userRoom(userId)).emit("PAYOUT", notice);
@@ -228,6 +265,7 @@ function voidMarket(marketId, reason) {
   }
 
   io.emit("MARKET_VOIDED", serializeMarket(m));
+  scheduleLeaderboard();
   console.log(`[void] ${marketId} "${m.title}" — ${reason}`);
 }
 
@@ -285,6 +323,7 @@ function settleMarket(m, winningOption) {
   }
 
   io.emit("MARKET_SETTLED", serializeMarket(m));
+  scheduleLeaderboard();
   console.log(`[settle] ${m.id} "${m.title}" → ${winningOption}, pool ${totalPool}, bounty ${bounty}`);
 }
 
@@ -327,6 +366,11 @@ function onConnection(socket) {
     return id ? (users.get(id) ?? null) : null;
   };
 
+  // A user going offline changes their leaderboard status.
+  socket.on("disconnect", () => {
+    if (socket.data.userId) scheduleLeaderboard();
+  });
+
   socket.on("REGISTER_USER", (payload, ack) => {
     const userId = cleanString(payload?.userId, 64);
     const username = cleanString(payload?.username, MAX_USERNAME_LEN);
@@ -350,9 +394,11 @@ function onConnection(socket) {
         user: { ...user },
         markets: [...markets.values()].map(serializeMarket),
         myBets: myBetsFor(userId),
+        leaderboard: buildLeaderboard(),
         serverNow: Date.now(),
       },
     });
+    scheduleLeaderboard();
   });
 
   socket.on("CREATE_MARKET", (payload, ack) => {
@@ -447,6 +493,7 @@ function onConnection(socket) {
       odds: computeOdds(p),
       bettorCount: bettorCount(m.id),
     });
+    scheduleLeaderboard();
     // Sync any other tabs of the same user.
     socket.to(userRoom(user.id)).emit("BALANCE_UPDATE", { balance: user.balance });
     ack({ ok: true, data: { stake: { ...stake }, balance: user.balance } });
