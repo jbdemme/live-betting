@@ -1,7 +1,7 @@
 # Lecture Bets — Live Micro-Betting (v1 prototype)
 
 Students bet play-money points on live lecture micro-events using parimutuel pools.
-See `CLAUDE.md` for the product and domain spec.
+New players: see [How to Play](HOW_TO_PLAY.md). See `CLAUDE.md` for the product and domain spec.
 
 ## Run
 
