@@ -25,7 +25,7 @@ Pick a timer (30s–10m) or **No limit** (you close betting yourself).
 
 ## Refunds
 Everyone is refunded if the Referee doesn't decide in time:
-- **Timed markets:** within 60 seconds after betting closes.
+- **Timed markets:** within 1 hour after betting closes.
 - **No-limit markets:** within 3 hours of creating the market.
 
 ## Fine print

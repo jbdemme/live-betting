@@ -71,7 +71,8 @@ const PORT = Number(process.env.PORT ?? 4000);
 const CLIENT_ORIGIN = process.env.CLIENT_ORIGIN ?? "*";
 const STARTING_BALANCE = 1000;
 const REFEREE_BOUNTY_RATE = 0.05;
-const REFEREE_SETTLE_WINDOW_MS = 60_000;
+/** Timed markets: how long the Referee has to settle after betting closes before it auto-voids. */
+const REFEREE_SETTLE_WINDOW_MS = 60 * 60 * 1000;
 /** No-time-limit markets refund everyone if still unsettled this long after creation. */
 const NO_LIMIT_AUTO_VOID_MS = 3 * 60 * 60 * 1000;
 /** Debounce for writing snapshots to the database. */
@@ -298,7 +299,7 @@ function scheduleSettleDeadline(m) {
   const reason =
     m.expiresAt === null
       ? `Not settled within ${NO_LIMIT_AUTO_VOID_MS / 3_600_000} hours`
-      : `Referee did not settle within ${REFEREE_SETTLE_WINDOW_MS / 1000}s`;
+      : `Referee did not settle within ${REFEREE_SETTLE_WINDOW_MS / 60_000} minutes`;
   scheduleTimer(m.id, m.settleDeadline - Date.now(), () => voidMarket(m.id, reason));
 }
 
@@ -388,7 +389,7 @@ function restore(snap) {
 
 /**
  * Re-arm timers for unresolved markets after a restart. Downtime never eats a timed
- * market's 60s ruling window (an expired window restarts); the no-limit 3h cap is absolute.
+ * market's 1h ruling window (an expired window restarts); the no-limit 3h cap is absolute.
  */
 function restoreTimers() {
   const now = Date.now();
