@@ -6,12 +6,11 @@
  * production server (`app-server.js`) that also serves the Next.js app on one port.
  * All state is in-memory: restarting the process resets every market and balance.
  *
- * Neutral Referee rules:
- *  - Each market has at most one Referee, who alone may settle it.
- *  - A user may claim Referee only while the market is OPEN and only with 0 bets on it.
- *  - A Referee may never bet on the market they referee.
- *  - When betting closes the market LOCKS. If nobody claimed Referee by then, it auto-VOIDs.
- *  - The Referee then has REFEREE_SETTLE_WINDOW_MS to settle, or the market auto-VOIDs.
+ * Referee rules:
+ *  - The user who creates a market is its Referee and the only one who may settle it.
+ *  - The Referee may never bet on their own market.
+ *  - When betting closes the market LOCKS, and the Referee has REFEREE_SETTLE_WINDOW_MS
+ *    to declare the outcome, or the market auto-VOIDs. They may also settle early, while OPEN.
  *  - Settling pays winners `wager * (totalPool / winningPool)` and mints a 5% bounty
  *    (of the total pool) for the Referee on top.
  *  - VOID refunds every wager in full.
@@ -50,7 +49,6 @@ const { v4: uuidv4 } = require("uuid");
  * @property {number} createdAt
  * @property {number} expiresAt
  * @property {number | null} settleDeadline
- * @property {string | null} refereeId
  * @property {OptionId | null} winningOption
  * @property {number | null} refereeBounty
  * @property {string | null} voidReason
@@ -131,11 +129,6 @@ function bettorCount(marketId) {
   return bets.get(marketId)?.size ?? 0;
 }
 
-/** @param {string} marketId @param {string} userId @returns {Stake} */
-function getStake(marketId, userId) {
-  return bets.get(marketId)?.get(userId) ?? { A: 0, B: 0 };
-}
-
 /** @param {MarketRecord} m @returns {Market} */
 function serializeMarket(m) {
   const p = getPools(m.id);
@@ -149,8 +142,6 @@ function serializeMarket(m) {
     createdAt: m.createdAt,
     expiresAt: m.expiresAt,
     settleDeadline: m.settleDeadline,
-    refereeId: m.refereeId,
-    refereeName: m.refereeId ? (users.get(m.refereeId)?.username ?? "unknown") : null,
     pools: p,
     totalPool: p.A + p.B,
     odds: computeOdds(p),
@@ -235,15 +226,10 @@ function voidMarket(marketId, reason) {
   console.log(`[void] ${marketId} "${m.title}" — ${reason}`);
 }
 
-/** Betting window closed: lock, or void if no referee is seated. @param {string} marketId */
+/** Betting window closed: lock and start the Referee's settle window. @param {string} marketId */
 function lockMarket(marketId) {
   const m = markets.get(marketId);
   if (!m || m.status !== "OPEN") return;
-
-  if (!m.refereeId) {
-    voidMarket(marketId, "No referee claimed before betting closed");
-    return;
-  }
 
   m.status = "LOCKED";
   m.settleDeadline = Date.now() + REFEREE_SETTLE_WINDOW_MS;
@@ -255,7 +241,7 @@ function lockMarket(marketId) {
 }
 
 /**
- * SETTLE: pay winners `wager * (totalPool / winningPool)`, mint a 5% bounty for the referee.
+ * SETTLE: pay winners `wager * (totalPool / winningPool)`, mint a 5% bounty for the Referee (creator).
  * @param {MarketRecord} m
  * @param {OptionId} winningOption
  */
@@ -288,9 +274,9 @@ function settleMarket(m, winningOption) {
 
   const bounty = Math.round(totalPool * REFEREE_BOUNTY_RATE);
   m.refereeBounty = bounty;
-  if (m.refereeId && bounty > 0) {
-    creditUser(m.refereeId, bounty);
-    notify(m.refereeId, { marketId: m.id, title: m.title, kind: "BOUNTY", amount: bounty });
+  if (bounty > 0) {
+    creditUser(m.creatorId, bounty);
+    notify(m.creatorId, { marketId: m.id, title: m.title, kind: "BOUNTY", amount: bounty });
   }
 
   io.emit("MARKET_SETTLED", serializeMarket(m));
@@ -393,7 +379,6 @@ function onConnection(socket) {
       createdAt: now,
       expiresAt: now + durationSec * 1000,
       settleDeadline: null,
-      refereeId: null,
       winningOption: null,
       refereeBounty: null,
       voidReason: null,
@@ -422,7 +407,7 @@ function onConnection(socket) {
 
     if (!m) return ack({ ok: false, error: "Market not found" });
     if (m.status !== "OPEN" || Date.now() >= m.expiresAt) return ack({ ok: false, error: "Betting is closed" });
-    if (m.refereeId === user.id) return ack({ ok: false, error: "The Referee cannot bet on this market" });
+    if (m.creatorId === user.id) return ack({ ok: false, error: "You can't bet on a market you referee" });
     if (!isOptionId(optionId)) return ack({ ok: false, error: "Invalid option" });
     if (!Number.isInteger(amount) || amount <= 0) return ack({ ok: false, error: "Amount must be a positive integer" });
     if (amount > user.balance) return ack({ ok: false, error: "Insufficient balance" });
@@ -450,31 +435,13 @@ function onConnection(socket) {
     ack({ ok: true, data: { stake: { ...stake }, balance: user.balance } });
   });
 
-  socket.on("CLAIM_REFEREE", (payload, ack) => {
-    const user = currentUser();
-    if (!user) return ack({ ok: false, error: "Register first" });
-
-    const m = typeof payload?.marketId === "string" ? markets.get(payload.marketId) : undefined;
-    if (!m) return ack({ ok: false, error: "Market not found" });
-    if (m.status !== "OPEN" || Date.now() >= m.expiresAt) return ack({ ok: false, error: "Referee can only be claimed while betting is open" });
-    if (m.refereeId) return ack({ ok: false, error: "A Referee is already assigned" });
-
-    const stake = getStake(m.id, user.id);
-    if (stake.A + stake.B > 0) return ack({ ok: false, error: "You have active bets on this market and cannot be its Referee" });
-
-    m.refereeId = user.id;
-    io.emit("MARKET_UPDATED", serializeMarket(m));
-    ack({ ok: true, data: null });
-    console.log(`[referee] ${user.username} → ${m.id}`);
-  });
-
   socket.on("SETTLE_MARKET", (payload, ack) => {
     const user = currentUser();
     if (!user) return ack({ ok: false, error: "Register first" });
 
     const m = typeof payload?.marketId === "string" ? markets.get(payload.marketId) : undefined;
     if (!m) return ack({ ok: false, error: "Market not found" });
-    if (m.refereeId !== user.id) return ack({ ok: false, error: "Only the assigned Referee can settle this market" });
+    if (m.creatorId !== user.id) return ack({ ok: false, error: "Only the market's creator (its Referee) can settle it" });
     if (m.status !== "OPEN" && m.status !== "LOCKED") return ack({ ok: false, error: "Market is already resolved" });
     if (!isOptionId(payload?.winningOption)) return ack({ ok: false, error: "Invalid winning option" });
 
