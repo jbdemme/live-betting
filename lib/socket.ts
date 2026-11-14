@@ -63,6 +63,14 @@ export async function placeBet(marketId: string, optionId: OptionId, amount: num
   }
 }
 
+export async function closeBetting(marketId: string): Promise<Ack> {
+  try {
+    return await getSocket().timeout(ACK_TIMEOUT_MS).emitWithAck("CLOSE_BETTING", { marketId });
+  } catch (err) {
+    return failure(err);
+  }
+}
+
 export async function settleMarket(marketId: string, winningOption: OptionId): Promise<Ack> {
   try {
     return await getSocket()

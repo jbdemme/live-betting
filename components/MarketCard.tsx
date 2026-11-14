@@ -2,7 +2,7 @@
 
 import { useState, type ReactNode } from "react";
 import type { Ack, Market, OptionId } from "@/lib/types";
-import { placeBet, settleMarket } from "@/lib/socket";
+import { closeBetting, placeBet, settleMarket } from "@/lib/socket";
 import { EMPTY_STAKE, stakeTotal, useBettingStore } from "@/store/useBettingStore";
 import { useServerNow } from "@/hooks/useNow";
 import { formatCountdown, formatOdds, formatPts, optionLabel, settledPayout } from "@/lib/format";
@@ -43,7 +43,7 @@ export default function MarketCard({ market }: { market: Market }) {
   // The creator is the Referee: they settle the market and can never bet on it.
   const isReferee = userId !== null && market.creatorId === userId;
   const myTotal = stakeTotal(stake);
-  const bettingOpen = market.status === "OPEN" && now < market.expiresAt;
+  const bettingOpen = market.status === "OPEN" && (market.expiresAt === null || now < market.expiresAt);
   const resolved = market.status === "SETTLED" || market.status === "VOID";
 
   const run = async (action: () => Promise<Ack>) => {
@@ -139,6 +139,7 @@ export default function MarketCard({ market }: { market: Market }) {
         now={now}
         isReferee={isReferee}
         pending={pending}
+        onCloseBetting={() => run(() => closeBetting(market.id))}
         onSettle={(winner) => run(() => settleMarket(market.id, winner))}
       />
 
@@ -148,7 +149,16 @@ export default function MarketCard({ market }: { market: Market }) {
 }
 
 function Timer({ market, now }: { market: Market; now: number }) {
-  if (market.status === "OPEN") {
+  const noLimit = market.expiresAt === null;
+  if (market.status === "OPEN" && noLimit) {
+    return (
+      <div className="text-right">
+        <div className="text-[10px] uppercase tracking-wider text-zinc-500">Betting</div>
+        <div className="text-sm font-bold text-zinc-100">No time limit</div>
+      </div>
+    );
+  }
+  if (market.status === "OPEN" && market.expiresAt !== null) {
     const remaining = market.expiresAt - now;
     const urgent = remaining < 15_000;
     return (
@@ -163,7 +173,9 @@ function Timer({ market, now }: { market: Market; now: number }) {
   if (market.status === "LOCKED" && market.settleDeadline) {
     return (
       <div className="text-right">
-        <div className="text-[10px] uppercase tracking-wider text-amber-500/80">Ruling due</div>
+        <div className="text-[10px] uppercase tracking-wider text-amber-500/80">
+          {noLimit ? "Auto-refund in" : "Ruling due"}
+        </div>
         <div className="font-mono text-xl font-bold tabular-nums text-amber-300">
           {formatCountdown(market.settleDeadline - now)}
         </div>
@@ -212,10 +224,11 @@ interface RefereePanelProps {
   now: number;
   isReferee: boolean;
   pending: boolean;
+  onCloseBetting: () => void;
   onSettle: (winner: OptionId) => void;
 }
 
-function RefereePanel({ market, now, isReferee, pending, onSettle }: RefereePanelProps) {
+function RefereePanel({ market, now, isReferee, pending, onCloseBetting, onSettle }: RefereePanelProps) {
   const [selected, setSelected] = useState<OptionId | null>(null);
 
   if (market.status === "SETTLED") {
@@ -261,11 +274,17 @@ function RefereePanel({ market, now, isReferee, pending, onSettle }: RefereePane
         </span>
         <span className="font-mono text-xs text-amber-200/80">your bounty ≈ +{formatPts(bounty)} pts</span>
       </div>
-      <p className="mt-2 text-xs text-zinc-400">
-        {market.status === "LOCKED" && market.settleDeadline
-          ? `Betting closed. Declare the outcome within ${formatCountdown(market.settleDeadline - now)} or the market is voided.`
-          : "You created this market, so you can't bet on it. Declare the outcome once it happens — settling ends betting immediately."}
-      </p>
+      <p className="mt-2 text-xs text-zinc-400">{refereeHint(market, now)}</p>
+      {market.status === "OPEN" && market.expiresAt === null && (
+        <button
+          type="button"
+          disabled={pending}
+          onClick={onCloseBetting}
+          className="mt-2 w-full rounded-lg border border-zinc-600 bg-zinc-800 py-1.5 text-sm font-semibold text-zinc-200 transition hover:bg-zinc-700 disabled:opacity-40"
+        >
+          Close betting
+        </button>
+      )}
       <div className="mt-2 flex gap-2">
         {(["A", "B"] as const).map((id) => (
           <button
@@ -294,4 +313,16 @@ function RefereePanel({ market, now, isReferee, pending, onSettle }: RefereePane
       )}
     </div>
   );
+}
+
+function refereeHint(market: Market, now: number): string {
+  const deadline = market.settleDeadline !== null ? formatCountdown(market.settleDeadline - now) : null;
+  if (market.expiresAt === null) {
+    return market.status === "OPEN"
+      ? `No time limit: close betting once the outcome gets predictable, then declare it. Unsettled markets refund everyone in ${deadline}.`
+      : `Betting closed. Declare the outcome once it's known (within ${deadline}, or everyone is refunded).`;
+  }
+  return market.status === "LOCKED" && deadline
+    ? `Betting closed. Declare the outcome within ${deadline} or the market is voided.`
+    : "You created this market, so you can't bet on it. Declare the outcome once it happens — settling ends betting immediately.";
 }

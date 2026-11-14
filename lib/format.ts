@@ -4,12 +4,14 @@ export const formatPts = (n: number): string => n.toLocaleString("en-US");
 
 export const formatOdds = (odds: number | null): string => (odds === null ? "—" : `${odds.toFixed(2)}x`);
 
-/** mm:ss countdown, clamped at 0. */
+/** m:ss (or h:mm:ss for an hour or more) countdown, clamped at 0. */
 export function formatCountdown(ms: number): string {
   const total = Math.max(0, Math.ceil(ms / 1000));
-  const m = Math.floor(total / 60);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
   const s = total % 60;
-  return `${m}:${s.toString().padStart(2, "0")}`;
+  const ss = s.toString().padStart(2, "0");
+  return h > 0 ? `${h}:${m.toString().padStart(2, "0")}:${ss}` : `${m}:${ss}`;
 }
 
 export function optionLabel(market: Market, id: OptionId): string {

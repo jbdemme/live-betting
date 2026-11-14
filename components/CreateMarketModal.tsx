@@ -3,12 +3,14 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { createMarket } from "@/lib/socket";
 
-const DURATIONS: { label: string; seconds: number }[] = [
+/** `seconds: null` = no time limit: betting stays open until the creator closes it. */
+const DURATIONS: { label: string; seconds: number | null }[] = [
   { label: "30s", seconds: 30 },
   { label: "1m", seconds: 60 },
   { label: "2m", seconds: 120 },
   { label: "5m", seconds: 300 },
   { label: "10m", seconds: 600 },
+  { label: "No limit", seconds: null },
 ];
 
 const TEMPLATES = [
@@ -16,6 +18,7 @@ const TEMPLATES = [
   "Prof says 'essentially' 5+ times",
   "Someone's phone rings during lecture",
   "Lecture ends early",
+  "Prof says 'essentially' 10+ times in the rest of the lecture",
 ];
 
 interface CreateMarketModalProps {
@@ -33,7 +36,7 @@ function CreateMarketForm({ onClose }: { onClose: () => void }) {
   const [title, setTitle] = useState("");
   const [optionA, setOptionA] = useState("Yes");
   const [optionB, setOptionB] = useState("No");
-  const [durationSec, setDurationSec] = useState(120);
+  const [durationSec, setDurationSec] = useState<number | null>(120);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const titleRef = useRef<HTMLInputElement>(null);
@@ -133,11 +136,11 @@ function CreateMarketForm({ onClose }: { onClose: () => void }) {
           <div className="mt-1.5 flex gap-1.5">
             {DURATIONS.map((d) => (
               <button
-                key={d.seconds}
+                key={d.label}
                 type="button"
                 onClick={() => setDurationSec(d.seconds)}
                 aria-pressed={durationSec === d.seconds}
-                className={`flex-1 rounded-lg border px-2 py-1.5 text-sm font-medium transition ${
+                className={`flex-1 whitespace-nowrap rounded-lg border px-2 py-1.5 text-sm font-medium transition ${
                   durationSec === d.seconds
                     ? "border-indigo-500 bg-indigo-500/15 text-indigo-200"
                     : "border-zinc-700 text-zinc-400 hover:border-zinc-500"
@@ -148,8 +151,11 @@ function CreateMarketForm({ onClose }: { onClose: () => void }) {
             ))}
           </div>
           <p className="text-xs text-zinc-500">
-            You&apos;re the Referee: you can&apos;t bet on this market, and you declare the outcome. After betting
-            closes you have 60s to do it, or all wagers are refunded. Settling earns you 5% of the pool.
+            You&apos;re the Referee: you can&apos;t bet on this market, and you declare the outcome. Settling earns
+            you 5% of the pool.{" "}
+            {durationSec === null
+              ? "Betting stays open until you close it. If you don't declare the outcome within 3 hours, all wagers are refunded."
+              : "After betting closes you have 60s to declare it, or all wagers are refunded."}
           </p>
         </fieldset>
 
