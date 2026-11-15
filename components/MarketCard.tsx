@@ -1,11 +1,11 @@
 "use client";
 
 import { useState, type ReactNode } from "react";
-import type { Ack, Market, OptionId } from "@/lib/types";
+import type { Ack, Market, OptionId, PlacedBet } from "@/lib/types";
 import { closeBetting, placeBet, settleMarket } from "@/lib/socket";
-import { EMPTY_STAKE, stakeTotal, useBettingStore } from "@/store/useBettingStore";
+import { EMPTY_BETS, betsTotal, useBettingStore } from "@/store/useBettingStore";
 import { useServerNow } from "@/hooks/useNow";
-import { formatCountdown, formatOdds, formatPts, optionLabel, settledPayout } from "@/lib/format";
+import { formatCountdown, formatOdds, formatPts, optionLabel, payoutAt, payoutIf, settledPayout } from "@/lib/format";
 
 const QUICK_BETS = [50, 100, 250] as const;
 
@@ -34,7 +34,7 @@ const STATUS_STYLE: Record<Market["status"], string> = {
 export default function MarketCard({ market }: { market: Market }) {
   const userId = useBettingStore((s) => s.currentUser?.id ?? null);
   const balance = useBettingStore((s) => s.currentUser?.balance ?? 0);
-  const stake = useBettingStore((s) => s.myBets[market.id] ?? EMPTY_STAKE);
+  const myBets = useBettingStore((s) => s.myBets[market.id] ?? EMPTY_BETS);
   const now = useServerNow();
 
   const [pending, setPending] = useState(false);
@@ -42,7 +42,9 @@ export default function MarketCard({ market }: { market: Market }) {
 
   // The creator is the Referee: they settle the market and can never bet on it.
   const isReferee = userId !== null && market.creatorId === userId;
-  const myTotal = stakeTotal(stake);
+  const myTotal = betsTotal(myBets);
+  // A user backs only one side per market.
+  const backedSide: OptionId | null = myBets[0]?.optionId ?? null;
   const bettingOpen = market.status === "OPEN" && (market.expiresAt === null || now < market.expiresAt);
   const resolved = market.status === "SETTLED" || market.status === "VOID";
 
@@ -54,7 +56,8 @@ export default function MarketCard({ market }: { market: Market }) {
     if (!res.ok) setError(res.error);
   };
 
-  const shareA = market.totalPool > 0 ? (market.pools.A / market.totalPool) * 100 : 50;
+  // Implied chance of A from the current odds (fair odds, so 1/A + 1/B ≈ 1).
+  const shareA = (1 / market.odds.A / (1 / market.odds.A + 1 / market.odds.B)) * 100;
 
   return (
     <article
@@ -78,7 +81,7 @@ export default function MarketCard({ market }: { market: Market }) {
         <Timer market={market} now={now} />
       </div>
 
-      {/* Parimutuel odds bar */}
+      {/* Current fixed odds; the bar shows the implied chance */}
       <div className="mt-4">
         <div className="mb-1.5 flex justify-between text-sm">
           {(["A", "B"] as const).map((id) => (
@@ -88,50 +91,56 @@ export default function MarketCard({ market }: { market: Market }) {
                 {market.winningOption === id && " ✓"}
               </span>
               <span className="ml-2 font-mono text-zinc-300 tabular-nums">{formatOdds(market.odds[id])}</span>
-              <div className="font-mono text-xs text-zinc-500 tabular-nums">{formatPts(market.pools[id])} pts</div>
+              <div className="font-mono text-xs text-zinc-500 tabular-nums">{formatPts(market.pools[id])} pts staked</div>
             </div>
           ))}
         </div>
-        <div className="flex h-3 overflow-hidden rounded-full bg-zinc-800" role="img" aria-label={`${Math.round(shareA)}% of pool on ${optionLabel(market, "A")}`}>
-          <div
-            className={`${market.totalPool > 0 ? OPTION_STYLE.A.bar : "bg-zinc-700"} transition-[width] duration-700 ease-out`}
-            style={{ width: `${shareA}%` }}
-          />
-          <div
-            className={`${market.totalPool > 0 ? OPTION_STYLE.B.bar : "bg-zinc-700/60"} flex-1 transition-[width] duration-700 ease-out`}
-          />
+        <div className="flex h-3 overflow-hidden rounded-full bg-zinc-800" role="img" aria-label={`${Math.round(shareA)}% implied chance for ${optionLabel(market, "A")}`}>
+          <div className={`${OPTION_STYLE.A.bar} transition-[width] duration-700 ease-out`} style={{ width: `${shareA}%` }} />
+          <div className={`${OPTION_STYLE.B.bar} flex-1 transition-[width] duration-700 ease-out`} />
         </div>
-        <div className="mt-1 text-center font-mono text-xs text-zinc-500 tabular-nums">
-          Total pool {formatPts(market.totalPool)} pts
+        <div className="mt-1 flex justify-between font-mono text-xs text-zinc-500 tabular-nums">
+          <span>{Math.round(shareA)}%</span>
+          <span>Total staked {formatPts(market.totalPool)} pts</span>
+          <span>{100 - Math.round(shareA)}%</span>
         </div>
       </div>
 
       {/* Quick bets */}
       {bettingOpen && !isReferee && (
         <div className="mt-4 grid gap-2">
-          {(["A", "B"] as const).map((id) => (
-            <div key={id} className="flex items-center gap-1.5">
-              <span className={`w-16 shrink-0 truncate text-xs font-medium ${OPTION_STYLE[id].text}`}>
-                {optionLabel(market, id)}
-              </span>
-              {QUICK_BETS.map((amt) => (
-                <button
-                  key={amt}
-                  type="button"
-                  disabled={pending || amt > balance}
-                  onClick={() => run(() => placeBet(market.id, id, amt))}
-                  className={`flex-1 rounded-lg border px-2 py-1.5 font-mono text-sm font-semibold transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-30 ${OPTION_STYLE[id].btn}`}
-                >
-                  +{amt}
-                </button>
-              ))}
-            </div>
-          ))}
+          {(["A", "B"] as const)
+            .filter((id) => backedSide === null || backedSide === id)
+            .map((id) => (
+              <div key={id} className="flex items-center gap-1.5">
+                <span className={`w-16 shrink-0 truncate text-xs font-medium ${OPTION_STYLE[id].text}`}>
+                  {optionLabel(market, id)}
+                </span>
+                {QUICK_BETS.map((amt) => (
+                  <button
+                    key={amt}
+                    type="button"
+                    disabled={pending || amt > balance}
+                    onClick={() => run(() => placeBet(market.id, id, amt))}
+                    title={`Bet ${amt} pts at ${formatOdds(market.odds[id])}: pays ${payoutAt(amt, market.odds[id])} pts if ${optionLabel(market, id)} wins`}
+                    className={`flex-1 rounded-lg border px-2 py-1 font-mono text-sm font-semibold leading-tight transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-30 ${OPTION_STYLE[id].btn}`}
+                  >
+                    +{amt}
+                    <span className="block text-[10px] font-normal opacity-70">pays {formatPts(payoutAt(amt, market.odds[id]))}</span>
+                  </button>
+                ))}
+              </div>
+            ))}
+          {backedSide !== null && (
+            <p className="text-[11px] text-zinc-500">
+              You backed {optionLabel(market, backedSide)}, so you can only add to that side. Each bet keeps the odds it got.
+            </p>
+          )}
         </div>
       )}
 
       {/* My position */}
-      {myTotal > 0 && <MyPosition market={market} stake={stake} />}
+      {myTotal > 0 && <MyPosition market={market} bets={myBets} />}
 
       {/* Referee */}
       <RefereePanel
@@ -185,13 +194,13 @@ function Timer({ market, now }: { market: Market; now: number }) {
   return null;
 }
 
-function MyPosition({ market, stake }: { market: Market; stake: Market["pools"] }) {
-  const total = stakeTotal(stake);
-  let outcome: ReactNode = null;
+function MyPosition({ market, bets }: { market: Market; bets: PlacedBet[] }) {
+  const total = betsTotal(bets);
+  const side = bets[0].optionId;
+  let outcome: ReactNode;
 
   if (market.status === "SETTLED") {
-    const payout = settledPayout(market, stake);
-    const net = payout - total;
+    const net = settledPayout(market, bets) - total;
     outcome = (
       <span className={net >= 0 ? "text-emerald-300" : "text-rose-300"}>
         {net >= 0 ? "+" : "−"}
@@ -200,21 +209,34 @@ function MyPosition({ market, stake }: { market: Market; stake: Market["pools"] 
     );
   } else if (market.status === "VOID") {
     outcome = <span className="text-zinc-300">{formatPts(total)} pts refunded</span>;
+  } else {
+    outcome = (
+      <span className="text-zinc-300">
+        pays {formatPts(payoutIf(bets, side))} if {optionLabel(market, side)} wins
+      </span>
+    );
   }
 
   return (
-    <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-lg bg-zinc-950/60 px-3 py-2 text-xs">
-      <span className="text-zinc-400">
-        Your stake:{" "}
-        {(["A", "B"] as const)
-          .filter((id) => stake[id] > 0)
-          .map((id) => (
-            <span key={id} className={`ml-1 font-mono font-semibold ${OPTION_STYLE[id].text}`}>
-              {formatPts(stake[id])} on {optionLabel(market, id)}
+    <div className="mt-3 rounded-lg bg-zinc-950/60 px-3 py-2 text-xs">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="text-zinc-400">
+          Your bets: <span className="font-mono font-semibold text-zinc-200">{formatPts(total)} pts</span>
+        </span>
+        <span className="font-mono font-semibold">{outcome}</span>
+      </div>
+      <ul className="mt-1.5 space-y-0.5 font-mono tabular-nums">
+        {bets.map((b) => (
+          <li key={b.id} className="flex justify-between gap-2 text-zinc-500">
+            <span className={OPTION_STYLE[b.optionId].text}>
+              {formatPts(b.amount)} on {optionLabel(market, b.optionId)}
             </span>
-          ))}
-      </span>
-      {outcome && <span className="font-mono font-semibold">{outcome}</span>}
+            <span>
+              @ {formatOdds(b.odds)} → {formatPts(payoutAt(b.amount, b.odds))}
+            </span>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

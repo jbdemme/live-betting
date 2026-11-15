@@ -14,9 +14,17 @@
  *  - No-time-limit markets: betting stays OPEN until the Referee closes it (LOCKED) or settles.
  *    If unsettled NO_LIMIT_AUTO_VOID_MS after creation, the market auto-VOIDs.
  *  - The Referee may settle at any time while OPEN or LOCKED.
- *  - Settling pays winners `wager * (totalPool / winningPool)` and mints a 5% bounty
- *    (of the total pool) for the Referee on top.
+ *  - Settling pays each winning bet `floor(amount * lockedOdds)` and mints a 5% bounty
+ *    (of the total points staked) for the Referee on top. Losing stakes are gone.
  *  - VOID refunds every wager in full.
+ *
+ * Pricing (fixed odds, locked per bet):
+ *  - The creator sets a starting probability for option A (1–99%). It splits a virtual
+ *    seed of ODDS_SEED points: seedA = ODDS_SEED * p, seedB = ODDS_SEED * (1 - p).
+ *  - Current odds: odds(X) = (ODDS_SEED + total staked) / (seedX + staked on X), 2 decimals.
+ *  - A bet is locked at the odds current just before it is placed; its own stake then
+ *    moves the odds for later bettors. Payouts are minted, so they may exceed the stakes.
+ *  - A user may back only one option per market (prevents a risk-free two-sided hedge).
  *
  * Handlers run synchronously (no awaits between validation and mutation), so every
  * state transition is atomic with respect to other socket events.
@@ -35,7 +43,7 @@ const persistence = require("./persistence");
 /** @typedef {import("./lib/types").User} User */
 /** @typedef {import("./lib/types").Market} Market */
 /** @typedef {import("./lib/types").MarketOption} MarketOption */
-/** @typedef {import("./lib/types").Stake} Stake */
+/** @typedef {import("./lib/types").PlacedBet} PlacedBet */
 /** @typedef {import("./lib/types").MyBets} MyBets */
 /** @typedef {import("./lib/types").OddsMap} OddsMap */
 /** @typedef {import("./lib/types").PoolMap} PoolMap */
@@ -61,6 +69,7 @@ const persistence = require("./persistence");
  * @property {number | null} refereeBounty
  * @property {string | null} voidReason
  * @property {number | null} resolvedAt
+ * @property {number} initialProbA  Creator's starting probability for option A, percent 1–99.
  */
 
 // ---------------------------------------------------------------------------
@@ -71,6 +80,12 @@ const PORT = Number(process.env.PORT ?? 4000);
 const CLIENT_ORIGIN = process.env.CLIENT_ORIGIN ?? "*";
 const STARTING_BALANCE = 1000;
 const REFEREE_BOUNTY_RATE = 0.05;
+/** Virtual points split by the starting probability; larger = odds move less per bet. */
+const ODDS_SEED = 500;
+const MIN_PROB_A = 1;
+const MAX_PROB_A = 99;
+/** Odds never drop below this, so a winning bet always returns something on top. */
+const MIN_ODDS = 1.01;
 /** Timed markets: how long the Referee has to settle after betting closes before it auto-voids. */
 const REFEREE_SETTLE_WINDOW_MS = 60 * 60 * 1000;
 /** No-time-limit markets refund everyone if still unsettled this long after creation. */
@@ -79,7 +94,8 @@ const NO_LIMIT_AUTO_VOID_MS = 3 * 60 * 60 * 1000;
 const SAVE_DEBOUNCE_MS = 2000;
 /** Only the most recent resolved markets are kept (in memory and in the snapshot). */
 const MAX_RESOLVED_KEPT = 50;
-const SNAPSHOT_VERSION = 1;
+/** v1: parimutuel pools + per-user stakes. v2: fixed odds locked per bet. */
+const SNAPSHOT_VERSION = 2;
 const MIN_DURATION_SEC = 15;
 const MAX_DURATION_SEC = 60 * 60;
 const MAX_TITLE_LEN = 120;
@@ -98,7 +114,7 @@ const users = new Map();
 const markets = new Map();
 /** Pool allocations: total wagered points per option. @type {Map<string, Map<OptionId, number>>} */
 const pools = new Map();
-/** Per-market wagers: marketId -> userId -> stake per option. @type {Map<string, Map<string, Stake>>} */
+/** Per-market bets: marketId -> userId -> that user's bets (one option each). @type {Map<string, Map<string, PlacedBet[]>>} */
 const bets = new Map();
 /** Pending lock / referee-timeout timers. @type {Map<string, NodeJS.Timeout>} */
 const timers = new Map();
@@ -131,14 +147,24 @@ function getPools(marketId) {
   return { A: pool?.get("A") ?? 0, B: pool?.get("B") ?? 0 };
 }
 
-/** Parimutuel implied odds: Total Pool / Option Pool. @param {PoolMap} p @returns {OddsMap} */
-function computeOdds(p) {
-  const total = p.A + p.B;
-  return {
-    A: p.A > 0 ? total / p.A : null,
-    B: p.B > 0 ? total / p.B : null,
-  };
+/**
+ * Current fixed odds: (seed + total staked) / (option seed + option staked), 2 decimals.
+ * @param {MarketRecord} m @param {PoolMap} p @returns {OddsMap}
+ */
+function computeOdds(m, p) {
+  const seedA = (ODDS_SEED * m.initialProbA) / 100;
+  const seed = { A: seedA, B: ODDS_SEED - seedA };
+  const total = ODDS_SEED + p.A + p.B;
+  /** @param {OptionId} o */
+  const odds = (o) => Math.max(MIN_ODDS, Math.round((total / (seed[o] + p[o])) * 100) / 100);
+  return { A: odds("A"), B: odds("B") };
 }
+
+/** Payout of a winning bet; integer math on hundredths avoids float drift (1.15 * 100). @param {PlacedBet} bet */
+const betPayout = (bet) => Math.floor((bet.amount * Math.round(bet.odds * 100)) / 100);
+
+/** @param {PlacedBet[]} list */
+const sumAmounts = (list) => list.reduce((sum, b) => sum + b.amount, 0);
 
 /** @param {string} marketId */
 function bettorCount(marketId) {
@@ -158,9 +184,10 @@ function serializeMarket(m) {
     createdAt: m.createdAt,
     expiresAt: m.expiresAt,
     settleDeadline: m.settleDeadline,
+    initialProbA: m.initialProbA,
     pools: p,
     totalPool: p.A + p.B,
-    odds: computeOdds(p),
+    odds: computeOdds(m, p),
     bettorCount: bettorCount(m.id),
     winningOption: m.winningOption,
     refereeBounty: m.refereeBounty,
@@ -174,8 +201,8 @@ function myBetsFor(userId) {
   /** @type {MyBets} */
   const result = {};
   for (const [marketId, byUser] of bets) {
-    const stake = byUser.get(userId);
-    if (stake) result[marketId] = { ...stake };
+    const list = byUser.get(userId);
+    if (list) result[marketId] = list.map((b) => ({ ...b }));
   }
   return result;
 }
@@ -214,8 +241,8 @@ function buildLeaderboard() {
   for (const [marketId, byUser] of bets) {
     const status = markets.get(marketId)?.status;
     if (status !== "OPEN" && status !== "LOCKED") continue;
-    for (const [userId, stake] of byUser) {
-      atStake.set(userId, (atStake.get(userId) ?? 0) + stake.A + stake.B);
+    for (const [userId, list] of byUser) {
+      atStake.set(userId, (atStake.get(userId) ?? 0) + sumAmounts(list));
     }
   }
   return [...users.values()]
@@ -266,8 +293,8 @@ function voidMarket(marketId, reason) {
   m.voidReason = reason;
   m.resolvedAt = Date.now();
 
-  for (const [userId, stake] of bets.get(marketId) ?? []) {
-    const refund = stake.A + stake.B;
+  for (const [userId, list] of bets.get(marketId) ?? []) {
+    const refund = sumAmounts(list);
     if (refund > 0) {
       creditUser(userId, refund);
       notify(userId, { marketId, title: m.title, kind: "REFUND", amount: refund });
@@ -304,34 +331,31 @@ function scheduleSettleDeadline(m) {
 }
 
 /**
- * SETTLE: pay winners `wager * (totalPool / winningPool)`, mint a 5% bounty for the Referee (creator).
+ * SETTLE: pay each winning bet `floor(amount * lockedOdds)` (minted, so payouts may exceed
+ * the stakes), and mint a 5% bounty of the total staked for the Referee (creator).
+ * Losing stakes are simply gone, even when nobody backed the winner.
  * @param {MarketRecord} m
  * @param {OptionId} winningOption
  */
 function settleMarket(m, winningOption) {
   const p = getPools(m.id);
   const totalPool = p.A + p.B;
-  const winningPool = p[winningOption];
-
-  if (winningPool === 0) {
-    // Nobody backed the winner: there is no one to pay, so refund everyone instead of burning points.
-    voidMarket(m.id, `No wagers on the winning option ("${m.options.find((o) => o.id === winningOption)?.label}")`);
-    return;
-  }
 
   clearTimer(m.id);
   m.status = "SETTLED";
   m.winningOption = winningOption;
   m.resolvedAt = Date.now();
 
-  for (const [userId, stake] of bets.get(m.id) ?? []) {
-    const wager = stake[winningOption];
-    if (wager > 0) {
-      const payout = Math.floor((wager * totalPool) / winningPool);
+  let paidOut = 0;
+  for (const [userId, list] of bets.get(m.id) ?? []) {
+    const winners = list.filter((b) => b.optionId === winningOption);
+    if (winners.length > 0) {
+      const payout = winners.reduce((sum, b) => sum + betPayout(b), 0);
+      paidOut += payout;
       creditUser(userId, payout);
       notify(userId, { marketId: m.id, title: m.title, kind: "WIN", amount: payout });
     } else {
-      notify(userId, { marketId: m.id, title: m.title, kind: "LOSS", amount: stake.A + stake.B });
+      notify(userId, { marketId: m.id, title: m.title, kind: "LOSS", amount: sumAmounts(list) });
     }
   }
 
@@ -346,7 +370,7 @@ function settleMarket(m, winningOption) {
   scheduleLeaderboard();
   pruneResolved();
   markDirty();
-  console.log(`[settle] ${m.id} "${m.title}" → ${winningOption}, pool ${totalPool}, bounty ${bounty}`);
+  console.log(`[settle] ${m.id} "${m.title}" → ${winningOption}, staked ${totalPool}, paid ${paidOut}, bounty ${bounty}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -360,7 +384,17 @@ function settleMarket(m, winningOption) {
  * @property {User[]} users
  * @property {MarketRecord[]} markets
  * @property {[string, PoolMap][]} pools
- * @property {[string, [string, Stake][]][]} bets
+ * @property {[string, [string, PlacedBet[]][]][]} bets
+ */
+
+/**
+ * Snapshot written by the old parimutuel engine: one {A, B} stake per user and market.
+ * @typedef {Object} SnapshotV1
+ * @property {1} version
+ * @property {User[]} users
+ * @property {Omit<MarketRecord, "initialProbA">[]} markets
+ * @property {[string, PoolMap][]} pools
+ * @property {[string, [string, PoolMap][]][]} bets
  */
 
 /** @returns {Snapshot} */
@@ -384,7 +418,48 @@ function restore(snap) {
   for (const u of snap.users) users.set(u.id, { ...u });
   for (const m of snap.markets) markets.set(m.id, { ...m });
   for (const [id, p] of snap.pools) pools.set(id, new Map(OPTION_IDS.map((o) => [o, p[o] ?? 0])));
-  for (const [id, byUser] of snap.bets) bets.set(id, new Map(byUser.map(([uid, st]) => [uid, { ...st }])));
+  for (const [id, byUser] of snap.bets) {
+    bets.set(id, new Map(byUser.map(([uid, list]) => [uid, list.map((b) => ({ ...b }))])));
+  }
+}
+
+/**
+ * Upgrade a v1 (parimutuel) snapshot. Settled/voided history is kept, with each old stake
+ * shown as one bet at its final parimutuel odds; markets still OPEN or LOCKED are voided
+ * and refunded by the caller, since their stakes have no locked-in odds.
+ * @param {SnapshotV1} snap @returns {{ snap: Snapshot, unresolved: string[] }}
+ */
+function migrateV1(snap) {
+  /** @type {Map<string, PoolMap>} */
+  const poolById = new Map(snap.pools);
+  const createdAt = new Map(snap.markets.map((m) => [m.id, m.createdAt]));
+  return {
+    snap: {
+      version: SNAPSHOT_VERSION,
+      savedAt: Date.now(),
+      users: snap.users,
+      markets: snap.markets.map((m) => ({ ...m, initialProbA: 50 })),
+      pools: snap.pools,
+      bets: snap.bets.map(([id, byUser]) => {
+        const p = poolById.get(id) ?? { A: 0, B: 0 };
+        const total = p.A + p.B;
+        return [
+          id,
+          byUser.map(([uid, stake]) => [
+            uid,
+            OPTION_IDS.filter((o) => stake[o] > 0).map((o) => ({
+              id: uuidv4(),
+              optionId: o,
+              amount: stake[o],
+              odds: p[o] > 0 ? Math.floor((total / p[o]) * 100) / 100 : MIN_ODDS,
+              placedAt: createdAt.get(id) ?? 0,
+            })),
+          ]),
+        ];
+      }),
+    },
+    unresolved: snap.markets.filter((m) => m.status === "OPEN" || m.status === "LOCKED").map((m) => m.id),
+  };
 }
 
 /**
@@ -457,10 +532,15 @@ async function loadState() {
     console.log("[persist] DATABASE_URL not set: state is in-memory only");
     return;
   }
-  const snap = /** @type {Snapshot | null} */ (await persistence.claimAndLoad());
+  const snap = /** @type {Snapshot | SnapshotV1 | null} */ (await persistence.claimAndLoad());
   if (snap && snap.version === SNAPSHOT_VERSION) {
-    restore(snap);
+    restore(/** @type {Snapshot} */ (snap));
     console.log(`[persist] restored ${users.size} users and ${markets.size} markets`);
+  } else if (snap && snap.version === 1) {
+    const { snap: upgraded, unresolved } = migrateV1(/** @type {SnapshotV1} */ (snap));
+    restore(upgraded);
+    for (const id of unresolved) voidMarket(id, "Pricing system upgraded to fixed odds");
+    console.log(`[persist] upgraded v1 state: ${users.size} users, ${markets.size} markets, ${unresolved.length} voided`);
   } else {
     console.log("[persist] no saved state yet: starting fresh");
   }
@@ -586,6 +666,10 @@ function onConnection(socket) {
     ) {
       return ack({ ok: false, error: `Duration must be ${MIN_DURATION_SEC}–${MAX_DURATION_SEC} seconds, or no limit` });
     }
+    const probA = payload?.probA;
+    if (!Number.isInteger(probA) || probA < MIN_PROB_A || probA > MAX_PROB_A) {
+      return ack({ ok: false, error: `Starting chance must be a whole percent from ${MIN_PROB_A} to ${MAX_PROB_A}` });
+    }
 
     const now = Date.now();
     /** @type {MarketRecord} */
@@ -605,6 +689,7 @@ function onConnection(socket) {
       refereeBounty: null,
       voidReason: null,
       resolvedAt: null,
+      initialProbA: probA,
     };
 
     markets.set(m.id, m);
@@ -617,7 +702,7 @@ function onConnection(socket) {
     const wire = serializeMarket(m);
     io.emit("MARKET_CREATED", wire);
     ack({ ok: true, data: wire });
-    console.log(`[create] ${m.id} "${title}" by ${user.username}, ${durationSec === null ? "no limit" : `${durationSec}s`}`);
+    console.log(`[create] ${m.id} "${title}" by ${user.username}, ${durationSec === null ? "no limit" : `${durationSec}s`}, A at ${probA}%`);
   });
 
   socket.on("PLACE_BET", (payload, ack) => {
@@ -637,15 +722,23 @@ function onConnection(socket) {
     if (!isOptionId(optionId)) return ack({ ok: false, error: "Invalid option" });
     if (!Number.isInteger(amount) || amount <= 0) return ack({ ok: false, error: "Amount must be a positive integer" });
     if (amount > user.balance) return ack({ ok: false, error: "Insufficient balance" });
+    const byUser = /** @type {Map<string, PlacedBet[]>} */ (bets.get(m.id));
+    const mine = byUser.get(user.id) ?? [];
+    const backed = mine[0]?.optionId;
+    if (backed !== undefined && backed !== optionId) {
+      const label = m.options.find((o) => o.id === backed)?.label ?? backed;
+      return ack({ ok: false, error: `You already backed "${label}" here; you can only bet on one side` });
+    }
 
     // --- atomic mutation (no awaits) ---
+    // The bet is locked at the odds current *before* it lands; its stake then moves the odds.
+    /** @type {PlacedBet} */
+    const bet = { id: uuidv4(), optionId, amount, odds: computeOdds(m, getPools(m.id))[optionId], placedAt: Date.now() };
     user.balance -= amount;
     const pool = /** @type {Map<OptionId, number>} */ (pools.get(m.id));
     pool.set(optionId, (pool.get(optionId) ?? 0) + amount);
-    const byUser = /** @type {Map<string, Stake>} */ (bets.get(m.id));
-    const stake = byUser.get(user.id) ?? { A: 0, B: 0 };
-    stake[optionId] += amount;
-    byUser.set(user.id, stake);
+    mine.push(bet);
+    byUser.set(user.id, mine);
     // -----------------------------------
 
     const p = getPools(m.id);
@@ -653,14 +746,14 @@ function onConnection(socket) {
       marketId: m.id,
       pools: p,
       totalPool: p.A + p.B,
-      odds: computeOdds(p),
+      odds: computeOdds(m, p),
       bettorCount: bettorCount(m.id),
     });
     scheduleLeaderboard();
     markDirty();
     // Sync any other tabs of the same user.
     socket.to(userRoom(user.id)).emit("BALANCE_UPDATE", { balance: user.balance });
-    ack({ ok: true, data: { stake: { ...stake }, balance: user.balance } });
+    ack({ ok: true, data: { bet: { ...bet }, bets: mine.map((b) => ({ ...b })), balance: user.balance } });
   });
 
   socket.on("CLOSE_BETTING", (payload, ack) => {

@@ -1,6 +1,6 @@
 # Lecture Bets — Live Micro-Betting (v1 prototype)
 
-Students bet play-money points on live lecture micro-events using parimutuel pools.
+Students bet play-money points on live lecture micro-events at fixed odds that move with every bet.
 New players: see [How to Play](HOW_TO_PLAY.md). See `CLAUDE.md` for the product and domain spec.
 
 ## Run
@@ -69,9 +69,12 @@ it unset for in-memory only.
   stays open until the Referee taps **Close betting**; they then declare the outcome whenever it's known.
   If it isn't settled within **3 hours** of creation, it auto-voids.
 - The Referee can settle at any time, which also ends betting immediately.
-- **Settle:** each winner gets `wager × (total pool / winning pool)` (rounded down). The Referee gets
-  a bounty of **5% of the total pool**, minted on top (it doesn't reduce winners' payouts).
-  If nobody backed the winning option, the market is voided instead.
+- **Pricing (fixed odds):** the Referee sets a starting chance for option A (1–99%), which splits a virtual
+  seed of 500 pts. Current odds per option = `(500 + total staked) / (option seed + option staked)`,
+  rounded to 2 decimals. Each bet is locked at the odds shown when it is placed; its stake then moves the
+  odds for later bettors. A user can bet only one side per market (any number of times).
+- **Settle:** each winning bet pays `floor(stake × locked odds)`, minted, so payouts can exceed
+  the stakes; losing stakes are gone. The Referee gets a bounty of **5% of all points staked**, minted on top.
 - **Void:** every wager is refunded in full.
 
 ## Layout
@@ -91,6 +94,6 @@ it unset for in-memory only.
 Client → server (all acknowledged with `{ ok, data } | { ok: false, error }`):
 `REGISTER_USER`, `CREATE_MARKET`, `PLACE_BET`, `CLOSE_BETTING`, `SETTLE_MARKET`.
 
-Server → client: `MARKET_CREATED`, `MARKET_UPDATED`, `ODDS_UPDATE` (on every bet),
+Server → client: `MARKET_CREATED`, `MARKET_UPDATED`, `ODDS_UPDATE` (new current odds, on every bet),
 `MARKET_SETTLED`, `MARKET_VOIDED`, `BALANCE_UPDATE`, `PAYOUT`, `LEADERBOARD_UPDATE`
 (debounced; all users ranked by balance + points in open bets).

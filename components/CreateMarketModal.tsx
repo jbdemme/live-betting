@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { createMarket } from "@/lib/socket";
+import { formatOdds, oddsForProb } from "@/lib/format";
 
 /** `seconds: null` = no time limit: betting stays open until the creator closes it. */
 const DURATIONS: { label: string; seconds: number | null }[] = [
@@ -37,6 +38,8 @@ function CreateMarketForm({ onClose }: { onClose: () => void }) {
   const [optionA, setOptionA] = useState("Yes");
   const [optionB, setOptionB] = useState("No");
   const [durationSec, setDurationSec] = useState<number | null>(120);
+  /** Starting chance for option A, in percent; sets the starting odds of both options. */
+  const [probA, setProbA] = useState(50);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const titleRef = useRef<HTMLInputElement>(null);
@@ -54,7 +57,7 @@ function CreateMarketForm({ onClose }: { onClose: () => void }) {
     e.preventDefault();
     setPending(true);
     setError(null);
-    const res = await createMarket({ title, optionA, optionB, durationSec });
+    const res = await createMarket({ title, optionA, optionB, durationSec, probA });
     setPending(false);
     if (res.ok) onClose();
     else setError(res.error);
@@ -131,6 +134,31 @@ function CreateMarketForm({ onClose }: { onClose: () => void }) {
           </label>
         </div>
 
+        <label className="block space-y-1.5">
+          <span className="flex justify-between text-xs font-medium uppercase tracking-wide text-zinc-400">
+            <span>Starting chance</span>
+            <span className="normal-case tracking-normal text-zinc-500">bets move the odds from here</span>
+          </span>
+          <input
+            type="range"
+            min={1}
+            max={99}
+            step={1}
+            value={probA}
+            onChange={(e) => setProbA(Number(e.target.value))}
+            aria-valuetext={`${optionA || "Option A"} ${probA}%, ${optionB || "Option B"} ${100 - probA}%`}
+            className="w-full accent-sky-500"
+          />
+          <span className="flex justify-between font-mono text-sm tabular-nums">
+            <span className="text-sky-300">
+              {optionA || "A"} {probA}% · {formatOdds(oddsForProb(probA))}
+            </span>
+            <span className="text-fuchsia-300">
+              {optionB || "B"} {100 - probA}% · {formatOdds(oddsForProb(100 - probA))}
+            </span>
+          </span>
+        </label>
+
         <fieldset className="space-y-1.5">
           <legend className="text-xs font-medium uppercase tracking-wide text-zinc-400">Betting window</legend>
           <div className="mt-1.5 flex gap-1.5">
@@ -152,7 +180,7 @@ function CreateMarketForm({ onClose }: { onClose: () => void }) {
           </div>
           <p className="text-xs text-zinc-500">
             You&apos;re the Referee: you can&apos;t bet on this market, and you declare the outcome. Settling earns
-            you 5% of the pool.{" "}
+            you 5% of all points staked.{" "}
             {durationSec === null
               ? "Betting stays open until you close it. If you don't declare the outcome within 3 hours, all wagers are refunded."
               : "After betting closes you have 1 hour to declare it, or all wagers are refunded."}

@@ -54,8 +54,8 @@ export async function placeBet(marketId: string, optionId: OptionId, amount: num
       .timeout(ACK_TIMEOUT_MS)
       .emitWithAck("PLACE_BET", { marketId, optionId, amount });
     if (!res.ok) return res;
-    const { setStake, setBalance } = useBettingStore.getState();
-    setStake(marketId, res.data.stake);
+    const { setMyBets, setBalance } = useBettingStore.getState();
+    setMyBets(marketId, res.data.bets);
     setBalance(res.data.balance);
     return { ok: true, data: null };
   } catch (err) {
