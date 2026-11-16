@@ -24,6 +24,7 @@ Tap **+ Create Market**. You become its **Referee**:
 - You **decide the outcome**.
 - You set the **starting chance** for each side, which sets the starting odds.
 - You earn a **5% bonus** of all points staked. It's extra and doesn't reduce winnings.
+- Optional: tap **+1** on the card each time the event happens (e.g. every "good contribution"), so bettors can see the count so far.
 
 Pick a timer (30s–10m) or **No limit** (you close betting yourself).
 

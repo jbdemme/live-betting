@@ -74,6 +74,15 @@ export async function closeBetting(marketId: string): Promise<Ack> {
   }
 }
 
+export async function countEvent(marketId: string): Promise<Ack> {
+  try {
+    const res = await getSocket().timeout(ACK_TIMEOUT_MS).emitWithAck("COUNT_EVENT", { marketId });
+    return res.ok ? { ok: true, data: null } : res;
+  } catch (err) {
+    return failure(err);
+  }
+}
+
 export async function settleMarket(marketId: string, winningOption: OptionId): Promise<Ack> {
   try {
     return await getSocket()

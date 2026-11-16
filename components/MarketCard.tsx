@@ -2,7 +2,7 @@
 
 import { useState, type ReactNode } from "react";
 import type { Ack, Market, OptionId, PlacedBet } from "@/lib/types";
-import { closeBetting, placeBet, settleMarket } from "@/lib/socket";
+import { closeBetting, countEvent, placeBet, settleMarket } from "@/lib/socket";
 import { EMPTY_BETS, betsTotal, useBettingStore } from "@/store/useBettingStore";
 import { useServerNow } from "@/hooks/useNow";
 import AdminMarketTools from "@/components/AdminMarketTools";
@@ -83,6 +83,9 @@ export default function MarketCard({ market }: { market: Market }) {
         <Timer market={market} now={now} />
       </div>
 
+      {/* Live event counter (optional, kept by the Referee) */}
+      <EventCounter market={market} isReferee={isReferee} onError={setError} />
+
       {/* Current fixed odds; the bar shows the implied chance */}
       <div className="mt-4">
         <div className="mb-1.5 flex justify-between text-sm">
@@ -158,6 +161,59 @@ export default function MarketCard({ market }: { market: Market }) {
 
       {error && <p className="mt-3 rounded-lg bg-rose-500/10 px-3 py-2 text-sm text-rose-300">{error}</p>}
     </article>
+  );
+}
+
+function EventCounter({
+  market,
+  isReferee,
+  onError,
+}: {
+  market: Market;
+  isReferee: boolean;
+  onError: (error: string | null) => void;
+}) {
+  const active = market.status === "OPEN" || market.status === "LOCKED";
+  const canCount = isReferee && active;
+  // Bettors only see it once the Referee has started counting.
+  if (market.eventCount === null && !canCount) return null;
+  const count = market.eventCount ?? 0;
+
+  // Not disabled while a tap is in flight, so quick successive taps all count.
+  const onTap = async () => {
+    onError(null);
+    const res = await countEvent(market.id);
+    if (!res.ok) onError(res.error);
+  };
+
+  return (
+    <div className="mt-3 flex items-center gap-3 rounded-lg border border-zinc-800 bg-zinc-950/60 px-3 py-2">
+      <div className="min-w-0 flex-1">
+        <div className="text-[10px] uppercase tracking-wider text-zinc-500">
+          {active ? "Happened so far" : "Final count"}
+        </div>
+        {canCount && market.eventCount === null && (
+          <div className="text-[11px] text-zinc-500">Optional: tap + each time it happens so bettors can follow along.</div>
+        )}
+      </div>
+      <span
+        className="font-mono text-2xl font-bold tabular-nums text-zinc-100"
+        aria-live="polite"
+        aria-label={`Happened ${count} ${count === 1 ? "time" : "times"} so far`}
+      >
+        {count}×
+      </span>
+      {canCount && (
+        <button
+          type="button"
+          onClick={onTap}
+          aria-label="Count one more occurrence"
+          className="h-10 w-12 shrink-0 rounded-lg border border-amber-400/40 bg-amber-400/10 text-xl font-bold text-amber-200 transition hover:bg-amber-400/20 active:scale-90"
+        >
+          +1
+        </button>
+      )}
+    </div>
   );
 }
 

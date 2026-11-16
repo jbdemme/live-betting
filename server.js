@@ -17,6 +17,9 @@
  *  - Settling pays each winning bet `floor(amount * lockedOdds)` and mints a 5% bounty
  *    (of the total points staked) for the Referee on top. Losing stakes are gone.
  *  - VOID refunds every wager in full.
+ *  - Optional live counter: the Referee may tap COUNT_EVENT (+1) while the market is OPEN or
+ *    LOCKED, so bettors on over/under markets see how often the event has happened so far.
+ *    It is display-only and never settles anything; `eventCount` stays null until the first tap.
  *
  * Admin (only if the ADMIN_PASSWORD env var is set): ADMIN_LOGIN with the password returns a
  * token (HMAC of the user id) that the client re-sends on REGISTER_USER. An admin may adjust
@@ -77,6 +80,7 @@ const persistence = require("./persistence");
  * @property {string | null} voidReason
  * @property {number | null} resolvedAt
  * @property {number} initialProbA  Creator's starting probability for option A, percent 1–99.
+ * @property {number | null} eventCount  Referee's live tally of the event; null until first counted.
  */
 
 // ---------------------------------------------------------------------------
@@ -101,8 +105,8 @@ const NO_LIMIT_AUTO_VOID_MS = 3 * 60 * 60 * 1000;
 const SAVE_DEBOUNCE_MS = 2000;
 /** Only the most recent resolved markets are kept (in memory and in the snapshot). */
 const MAX_RESOLVED_KEPT = 50;
-/** v1: parimutuel pools + per-user stakes. v2: fixed odds locked per bet. */
-const SNAPSHOT_VERSION = 2;
+/** v1: parimutuel pools + per-user stakes. v2: fixed odds locked per bet. v3: + market eventCount. */
+const SNAPSHOT_VERSION = 3;
 const MIN_DURATION_SEC = 15;
 const MAX_DURATION_SEC = 60 * 60;
 const MAX_TITLE_LEN = 120;
@@ -117,6 +121,8 @@ const MAX_ADMIN_LOGIN_FAILURES = 5;
 const MAX_ADMIN_REASON_LEN = 80;
 /** Largest single balance adjustment. */
 const MAX_ADMIN_DELTA = 1_000_000;
+/** Upper bound for the Referee's live event counter. */
+const MAX_EVENT_COUNT = 9999;
 
 // ---------------------------------------------------------------------------
 // In-memory state
@@ -213,6 +219,7 @@ function serializeMarket(m) {
     expiresAt: m.expiresAt,
     settleDeadline: m.settleDeadline,
     initialProbA: m.initialProbA,
+    eventCount: m.eventCount,
     pools: p,
     totalPool: p.A + p.B,
     odds: computeOdds(m, p),
@@ -435,11 +442,16 @@ function settleMarket(m, winningOption) {
  */
 
 /**
+ * v2 snapshot: like v3, but markets have no `eventCount`.
+ * @typedef {Omit<Snapshot, "version" | "markets"> & { version: 2, markets: Omit<MarketRecord, "eventCount">[] }} SnapshotV2
+ */
+
+/**
  * Snapshot written by the old parimutuel engine: one {A, B} stake per user and market.
  * @typedef {Object} SnapshotV1
  * @property {1} version
  * @property {User[]} users
- * @property {Omit<MarketRecord, "initialProbA">[]} markets
+ * @property {Omit<MarketRecord, "initialProbA" | "eventCount">[]} markets
  * @property {[string, PoolMap][]} pools
  * @property {[string, [string, PoolMap][]][]} bets
  */
@@ -485,7 +497,7 @@ function migrateV1(snap) {
       version: SNAPSHOT_VERSION,
       savedAt: Date.now(),
       users: snap.users,
-      markets: snap.markets.map((m) => ({ ...m, initialProbA: 50 })),
+      markets: snap.markets.map((m) => ({ ...m, initialProbA: 50, eventCount: null })),
       pools: snap.pools,
       bets: snap.bets.map(([id, byUser]) => {
         const p = poolById.get(id) ?? { A: 0, B: 0 };
@@ -507,6 +519,11 @@ function migrateV1(snap) {
     },
     unresolved: snap.markets.filter((m) => m.status === "OPEN" || m.status === "LOCKED").map((m) => m.id),
   };
+}
+
+/** Upgrade a v2 snapshot: markets gain an (unused) live counter. @param {SnapshotV2} snap @returns {Snapshot} */
+function migrateV2(snap) {
+  return { ...snap, version: SNAPSHOT_VERSION, markets: snap.markets.map((m) => ({ ...m, eventCount: null })) };
 }
 
 /**
@@ -579,10 +596,13 @@ async function loadState() {
     console.log("[persist] DATABASE_URL not set: state is in-memory only");
     return;
   }
-  const snap = /** @type {Snapshot | SnapshotV1 | null} */ (await persistence.claimAndLoad());
+  const snap = /** @type {Snapshot | SnapshotV2 | SnapshotV1 | null} */ (await persistence.claimAndLoad());
   if (snap && snap.version === SNAPSHOT_VERSION) {
     restore(/** @type {Snapshot} */ (snap));
     console.log(`[persist] restored ${users.size} users and ${markets.size} markets`);
+  } else if (snap && snap.version === 2) {
+    restore(migrateV2(/** @type {SnapshotV2} */ (snap)));
+    console.log(`[persist] upgraded v2 state: ${users.size} users, ${markets.size} markets`);
   } else if (snap && snap.version === 1) {
     const { snap: upgraded, unresolved } = migrateV1(/** @type {SnapshotV1} */ (snap));
     restore(upgraded);
@@ -738,6 +758,7 @@ function onConnection(socket) {
       voidReason: null,
       resolvedAt: null,
       initialProbA: probA,
+      eventCount: null,
     };
 
     markets.set(m.id, m);
@@ -822,6 +843,23 @@ function onConnection(socket) {
     markDirty();
     ack({ ok: true, data: null });
     console.log(`[close] ${m.id} "${m.title}" betting closed by ${m.creatorId === user.id ? "referee" : `admin ${user.username}`}`);
+  });
+
+  socket.on("COUNT_EVENT", (payload, ack) => {
+    const user = currentUser();
+    if (!user) return ack({ ok: false, error: "Register first" });
+
+    const m = typeof payload?.marketId === "string" ? markets.get(payload.marketId) : undefined;
+    if (!m) return ack({ ok: false, error: "Market not found" });
+    if (m.creatorId !== user.id) return ack({ ok: false, error: "Only the market's creator (its Referee) can count events" });
+    if (m.status !== "OPEN" && m.status !== "LOCKED") return ack({ ok: false, error: "Market is already resolved" });
+    const next = (m.eventCount ?? 0) + 1;
+    if (next > MAX_EVENT_COUNT) return ack({ ok: false, error: `The counter stops at ${MAX_EVENT_COUNT}` });
+
+    m.eventCount = next;
+    io.emit("MARKET_UPDATED", serializeMarket(m));
+    markDirty();
+    ack({ ok: true, data: { eventCount: next } });
   });
 
   socket.on("SETTLE_MARKET", (payload, ack) => {
