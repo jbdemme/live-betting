@@ -36,11 +36,13 @@ export interface Market {
   creatorId: string;
   creatorName: string;
   createdAt: number;
-  /** Epoch ms when betting locks; null for a no-time-limit market (the creator closes betting). */
+  /** Epoch ms when the full event window ends; null for a no-time-limit market (the creator closes betting). */
   expiresAt: number | null;
+  /** Epoch ms when betting locks: after 80% of the duration (5 min market → 4 min). Null for no-time-limit markets. */
+  bettingClosesAt: number | null;
   /**
    * Epoch ms by which the referee must settle or the market auto-voids.
-   * Timed markets: set when betting locks. No-time-limit markets: set at creation.
+   * Timed markets: set when betting locks (1 hour after expiresAt). No-time-limit markets: set at creation.
    */
   settleDeadline: number | null;
   /** Creator's starting probability for option A, in percent (1–99). */
@@ -92,7 +94,7 @@ export interface CreateMarketPayload {
   title: string;
   optionA: string;
   optionB: string;
-  /** Betting window in seconds, or null for no time limit. */
+  /** Market duration in seconds (betting closes after 80% of it), or null for no time limit. */
   durationSec: number | null;
   /** Starting probability for option A in percent, integer 1–99; sets the starting odds. */
   probA: number;

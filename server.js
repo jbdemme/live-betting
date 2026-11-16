@@ -9,8 +9,10 @@
  * Referee rules:
  *  - The user who creates a market is its Referee and the only one who may settle it.
  *  - The Referee may never bet on their own market.
- *  - Timed markets: when betting closes the market LOCKS, and the Referee has
- *    REFEREE_SETTLE_WINDOW_MS to declare the outcome, or the market auto-VOIDs.
+ *  - Timed markets: betting closes (the market LOCKS) once BETTING_CLOSE_FRACTION (80%) of the
+ *    duration has passed, so nobody can bet in the final stretch while the event plays out.
+ *    The Referee has REFEREE_SETTLE_WINDOW_MS after the full duration ends to declare the
+ *    outcome, or the market auto-VOIDs.
  *  - No-time-limit markets: betting stays OPEN until the Referee closes it (LOCKED) or settles.
  *    If unsettled NO_LIMIT_AUTO_VOID_MS after creation, the market auto-VOIDs.
  *  - The Referee may settle at any time while OPEN or LOCKED.
@@ -73,7 +75,7 @@ const persistence = require("./persistence");
  * @property {MarketStatus} status
  * @property {string} creatorId
  * @property {number} createdAt
- * @property {number | null} expiresAt
+ * @property {number | null} expiresAt  End of the full event window (betting closes earlier, see bettingClosesAt).
  * @property {number | null} settleDeadline
  * @property {OptionId | null} winningOption
  * @property {number | null} refereeBounty
@@ -97,7 +99,9 @@ const MIN_PROB_A = 1;
 const MAX_PROB_A = 99;
 /** Odds never drop below this, so a winning bet always returns something on top. */
 const MIN_ODDS = 1.01;
-/** Timed markets: how long the Referee has to settle after betting closes before it auto-voids. */
+/** Timed markets: betting closes once this fraction of the duration has passed (5 min → closes at 4 min). */
+const BETTING_CLOSE_FRACTION = 0.8;
+/** Timed markets: how long the Referee has to settle after the full duration ends before it auto-voids. */
 const REFEREE_SETTLE_WINDOW_MS = 60 * 60 * 1000;
 /** No-time-limit markets refund everyone if still unsettled this long after creation. */
 const NO_LIMIT_AUTO_VOID_MS = 3 * 60 * 60 * 1000;
@@ -200,6 +204,15 @@ const betPayout = (bet) => Math.floor((bet.amount * Math.round(bet.odds * 100)) 
 /** @param {PlacedBet[]} list */
 const sumAmounts = (list) => list.reduce((sum, b) => sum + b.amount, 0);
 
+/**
+ * When betting closes on a timed market: after BETTING_CLOSE_FRACTION of its duration.
+ * @param {MarketRecord} m @returns {number | null} null for a no-time-limit market
+ */
+function bettingClosesAt(m) {
+  if (m.expiresAt === null) return null;
+  return m.createdAt + Math.round((m.expiresAt - m.createdAt) * BETTING_CLOSE_FRACTION);
+}
+
 /** @param {string} marketId */
 function bettorCount(marketId) {
   return bets.get(marketId)?.size ?? 0;
@@ -217,6 +230,7 @@ function serializeMarket(m) {
     creatorName: users.get(m.creatorId)?.username ?? "unknown",
     createdAt: m.createdAt,
     expiresAt: m.expiresAt,
+    bettingClosesAt: bettingClosesAt(m),
     settleDeadline: m.settleDeadline,
     initialProbA: m.initialProbA,
     eventCount: m.eventCount,
@@ -362,13 +376,17 @@ function voidMarket(marketId, reason) {
   console.log(`[void] ${marketId} "${m.title}" — ${reason}`);
 }
 
-/** Timed betting window closed: lock and start the Referee's settle window. @param {string} marketId */
+/**
+ * Timed betting window closed: lock and set the Referee's settle deadline, which runs
+ * REFEREE_SETTLE_WINDOW_MS from the end of the full duration (or from now, if that's later).
+ * @param {string} marketId
+ */
 function lockMarket(marketId) {
   const m = markets.get(marketId);
   if (!m || m.status !== "OPEN") return;
 
   m.status = "LOCKED";
-  m.settleDeadline = Date.now() + REFEREE_SETTLE_WINDOW_MS;
+  m.settleDeadline = Math.max(Date.now(), m.expiresAt ?? 0) + REFEREE_SETTLE_WINDOW_MS;
   io.emit("MARKET_UPDATED", serializeMarket(m));
   scheduleSettleDeadline(m);
   markDirty();
@@ -380,7 +398,7 @@ function scheduleSettleDeadline(m) {
   const reason =
     m.expiresAt === null
       ? `Not settled within ${NO_LIMIT_AUTO_VOID_MS / 3_600_000} hours`
-      : `Referee did not settle within ${REFEREE_SETTLE_WINDOW_MS / 60_000} minutes`;
+      : `Referee did not settle within ${REFEREE_SETTLE_WINDOW_MS / 60_000} minutes of the market ending`;
   scheduleTimer(m.id, m.settleDeadline - Date.now(), () => voidMarket(m.id, reason));
 }
 
@@ -528,14 +546,16 @@ function migrateV2(snap) {
 
 /**
  * Re-arm timers for unresolved markets after a restart. Downtime never eats a timed
- * market's 1h ruling window (an expired window restarts); the no-limit 3h cap is absolute.
+ * market's ruling window (1h after the full duration ends; an expired window restarts);
+ * the no-limit 3h cap is absolute.
  */
 function restoreTimers() {
   const now = Date.now();
   for (const m of markets.values()) {
-    if (m.status === "OPEN" && m.expiresAt !== null) {
+    const closesAt = bettingClosesAt(m);
+    if (m.status === "OPEN" && closesAt !== null) {
       // Overdue markets lock right away (with a fresh ruling window).
-      scheduleTimer(m.id, m.expiresAt - now, () => lockMarket(m.id));
+      scheduleTimer(m.id, closesAt - now, () => lockMarket(m.id));
     } else if (m.status === "LOCKED" && m.expiresAt !== null) {
       if (m.settleDeadline === null || m.settleDeadline < now) m.settleDeadline = now + REFEREE_SETTLE_WINDOW_MS;
       scheduleSettleDeadline(m);
@@ -764,8 +784,9 @@ function onConnection(socket) {
     markets.set(m.id, m);
     pools.set(m.id, new Map(OPTION_IDS.map((id) => [id, 0])));
     bets.set(m.id, new Map());
-    if (durationSec === null) scheduleSettleDeadline(m);
-    else scheduleTimer(m.id, durationSec * 1000, () => lockMarket(m.id));
+    const closesAt = bettingClosesAt(m);
+    if (closesAt === null) scheduleSettleDeadline(m);
+    else scheduleTimer(m.id, closesAt - now, () => lockMarket(m.id));
     markDirty();
 
     const wire = serializeMarket(m);
@@ -784,7 +805,8 @@ function onConnection(socket) {
     const m = typeof marketId === "string" ? markets.get(marketId) : undefined;
 
     if (!m) return ack({ ok: false, error: "Market not found" });
-    if (m.status !== "OPEN" || (m.expiresAt !== null && Date.now() >= m.expiresAt)) {
+    const closesAt = bettingClosesAt(m);
+    if (m.status !== "OPEN" || (closesAt !== null && Date.now() >= closesAt)) {
       return ack({ ok: false, error: "Betting is closed" });
     }
     if (m.creatorId === user.id) return ack({ ok: false, error: "You can't bet on a market you referee" });
