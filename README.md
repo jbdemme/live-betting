@@ -85,6 +85,8 @@ or change the password. An admin can:
   stays open until the Referee taps **Close betting**; they then declare the outcome whenever it's known.
   If it isn't settled within **3 hours** of creation, it auto-voids.
 - The Referee can settle at any time, which also ends betting immediately.
+- **Live counter (optional):** for over/under markets the Referee can tap **+1** each time the event happens,
+  while the market is open or locked. Everyone sees the count; it's display-only and never settles the market.
 - **Pricing (fixed odds):** the Referee sets a starting chance for option A (1–99%), which splits a virtual
   seed of 500 pts. Current odds per option = `(500 + total staked) / (option seed + option staked)`,
   rounded to 2 decimals. Each bet is locked at the odds shown when it is placed; its stake then moves the

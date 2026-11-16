@@ -45,6 +45,11 @@ export interface Market {
   settleDeadline: number | null;
   /** Creator's starting probability for option A, in percent (1–99). */
   initialProbA: number;
+  /**
+   * Referee's live tally of how often the event has happened (e.g. "says 'essentially'").
+   * Display-only, never settles anything; null until the Referee first taps +.
+   */
+  eventCount: number | null;
   /** Real points staked per option. */
   pools: PoolMap;
   /** Real points staked in total. */
@@ -179,6 +184,8 @@ export interface ClientToServerEvents {
   /** Creator-only, no-time-limit markets: stop betting before declaring the outcome. */
   CLOSE_BETTING: (payload: { marketId: string }, ack: (res: Ack) => void) => void;
   SETTLE_MARKET: (payload: SettleMarketPayload, ack: (res: Ack) => void) => void;
+  /** Referee-only, OPEN/LOCKED markets: add 1 to the live event counter (broadcast via MARKET_UPDATED). */
+  COUNT_EVENT: (payload: { marketId: string }, ack: (res: Ack<{ eventCount: number }>) => void) => void;
 
   // Admin. CLOSE_BETTING and SETTLE_MARKET above also accept an admin on any market
   // (an admin may close a timed market early, too).
@@ -197,7 +204,7 @@ export interface ClientToServerEvents {
 
 export interface ServerToClientEvents {
   MARKET_CREATED: (market: Market) => void;
-  /** Any non-odds change to a market (e.g. locked). */
+  /** Any non-odds change to a market (e.g. locked, event counted). */
   MARKET_UPDATED: (market: Market) => void;
   ODDS_UPDATE: (payload: OddsUpdatePayload) => void;
   MARKET_SETTLED: (market: Market) => void;
