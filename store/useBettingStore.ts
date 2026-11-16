@@ -36,6 +36,8 @@ interface BettingState {
   /** serverNow - clientNow, used to render timers against the server clock. */
   clockOffset: number;
   toasts: Toast[];
+  /** This socket has admin rights (see ADMIN_LOGIN). */
+  isAdmin: boolean;
 
   setIdentity: (identity: Identity | null) => void;
   setConnection: (status: ConnectionStatus) => void;
@@ -45,6 +47,8 @@ interface BettingState {
   setBalance: (balance: number) => void;
   setMyBets: (marketId: string, bets: PlacedBet[]) => void;
   setLeaderboard: (entries: LeaderboardEntry[]) => void;
+  setCurrentUser: (user: User) => void;
+  setIsAdmin: (isAdmin: boolean) => void;
   pushToast: (notice: PayoutNotice) => void;
   dismissToast: (id: string) => void;
 }
@@ -61,13 +65,15 @@ export const useBettingStore = create<BettingState>()((set) => ({
   leaderboard: [],
   clockOffset: 0,
   toasts: [],
+  isAdmin: false,
 
   setIdentity: (identity) => set({ identity, identityLoaded: true }),
 
   setConnection: (connection) => set({ connection }),
 
-  applySession: ({ user, markets, myBets, leaderboard, serverNow }) =>
+  applySession: ({ user, markets, myBets, leaderboard, serverNow, isAdmin }) =>
     set({
+      isAdmin,
       currentUser: user,
       markets: Object.fromEntries(markets.map((m) => [m.id, m])),
       myBets,
@@ -92,6 +98,10 @@ export const useBettingStore = create<BettingState>()((set) => ({
   setMyBets: (marketId, bets) => set((s) => ({ myBets: { ...s.myBets, [marketId]: bets } })),
 
   setLeaderboard: (leaderboard) => set({ leaderboard }),
+
+  setCurrentUser: (currentUser) => set({ currentUser }),
+
+  setIsAdmin: (isAdmin) => set({ isAdmin }),
 
   pushToast: (notice) =>
     set((s) => ({ toasts: [...s.toasts, { ...notice, id: `t${++toastSeq}` }].slice(-5) })),

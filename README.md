@@ -59,6 +59,22 @@ hand-over is dropped (bets are simply not charged). Only the 50 most recently re
 Locally, set `DATABASE_URL` too (append `?sslmode=disable` for a local Postgres without TLS), or leave
 it unset for in-memory only.
 
+### Admin
+
+Set `ADMIN_PASSWORD` (Render → **Environment**; locally `ADMIN_PASSWORD=… node server.js`) to enable admin.
+Without it, admin is off. In the app, click **Admin login** under the leaderboard and enter the password:
+that browser stays admin (it stores a token derived from the password and its user id) until you log out
+or change the password. An admin can:
+
+- **Users** (Admin button in the navbar): add/subtract points (balance can't go below 0; the user sees a
+  toast with the optional reason), rename a user, or remove a user (their bets in open markets are cancelled
+  without refund; if they come back they start over at 1,000 pts).
+- **Markets** (violet Admin box on each live market): close betting (also on timed markets, which starts the
+  Referee's 1-hour ruling window), settle on the Referee's behalf (the bounty still goes to the Referee),
+  void the market with an optional reason, or list every bet and void (refund) single ones. Other bets keep
+  their locked odds.
+- Settled and voided markets are final, even for an admin; correct mistakes by adjusting points.
+
 ## Referee rules
 
 - New users start with **1,000 pts**.
@@ -86,14 +102,17 @@ it unset for in-memory only.
 | `lib/socket.ts` | Socket singleton + client actions (create, bet, close betting, settle) |
 | `hooks/useSocket.ts` | Connection lifecycle; mirrors server broadcasts into the store |
 | `store/useBettingStore.ts` | Zustand store: user, markets with live odds, my bets |
-| `components/` | `Navbar`, `MarketCard`, `CreateMarketModal`, `Leaderboard`, `Toasts` |
+| `components/` | `Navbar`, `MarketCard`, `CreateMarketModal`, `Leaderboard`, `Toasts`, `AdminModal`, `AdminMarketTools` |
 | `app/page.tsx` | Join screen + feed of live and recently resolved markets |
 
 ## Socket events
 
 Client → server (all acknowledged with `{ ok, data } | { ok: false, error }`):
-`REGISTER_USER`, `CREATE_MARKET`, `PLACE_BET`, `CLOSE_BETTING`, `SETTLE_MARKET`.
+`REGISTER_USER`, `CREATE_MARKET`, `PLACE_BET`, `CLOSE_BETTING`, `SETTLE_MARKET`, and admin-only
+`ADMIN_LOGIN`, `ADMIN_LOGOUT`, `ADMIN_ADJUST_BALANCE`, `ADMIN_RENAME_USER`, `ADMIN_REMOVE_USER`,
+`ADMIN_VOID_MARKET`, `ADMIN_VOID_BET`, `ADMIN_GET_BETS`.
 
 Server → client: `MARKET_CREATED`, `MARKET_UPDATED`, `ODDS_UPDATE` (new current odds, on every bet),
 `MARKET_SETTLED`, `MARKET_VOIDED`, `BALANCE_UPDATE`, `PAYOUT`, `LEADERBOARD_UPDATE`
-(debounced; all users ranked by balance + points in open bets).
+(debounced; all users ranked by balance + points in open bets), `MY_BETS_UPDATE` (an admin voided one of
+your bets), `USER_UPDATE` (an admin renamed you), `ACCOUNT_REMOVED`.

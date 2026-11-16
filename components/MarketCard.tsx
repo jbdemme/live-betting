@@ -5,6 +5,7 @@ import type { Ack, Market, OptionId, PlacedBet } from "@/lib/types";
 import { closeBetting, placeBet, settleMarket } from "@/lib/socket";
 import { EMPTY_BETS, betsTotal, useBettingStore } from "@/store/useBettingStore";
 import { useServerNow } from "@/hooks/useNow";
+import AdminMarketTools from "@/components/AdminMarketTools";
 import { formatCountdown, formatOdds, formatPts, optionLabel, payoutAt, payoutIf, settledPayout } from "@/lib/format";
 
 const QUICK_BETS = [50, 100, 250] as const;
@@ -35,6 +36,7 @@ export default function MarketCard({ market }: { market: Market }) {
   const userId = useBettingStore((s) => s.currentUser?.id ?? null);
   const balance = useBettingStore((s) => s.currentUser?.balance ?? 0);
   const myBets = useBettingStore((s) => s.myBets[market.id] ?? EMPTY_BETS);
+  const isAdmin = useBettingStore((s) => s.isAdmin);
   const now = useServerNow();
 
   const [pending, setPending] = useState(false);
@@ -151,6 +153,8 @@ export default function MarketCard({ market }: { market: Market }) {
         onCloseBetting={() => run(() => closeBetting(market.id))}
         onSettle={(winner) => run(() => settleMarket(market.id, winner))}
       />
+
+      {isAdmin && !resolved && <AdminMarketTools market={market} isReferee={isReferee} />}
 
       {error && <p className="mt-3 rounded-lg bg-rose-500/10 px-3 py-2 text-sm text-rose-300">{error}</p>}
     </article>

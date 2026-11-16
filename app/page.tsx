@@ -7,6 +7,7 @@ import MarketCard from "@/components/MarketCard";
 import CreateMarketModal from "@/components/CreateMarketModal";
 import Toasts from "@/components/Toasts";
 import Leaderboard from "@/components/Leaderboard";
+import AdminModal from "@/components/AdminModal";
 import { loadIdentity, saveIdentity, useSocket } from "@/hooks/useSocket";
 import { SOCKET_URL } from "@/lib/socket";
 import { selectActiveMarkets, selectResolvedMarkets, useBettingStore } from "@/store/useBettingStore";
@@ -16,6 +17,8 @@ export default function Home() {
   const identityLoaded = useBettingStore((s) => s.identityLoaded);
   const setIdentity = useBettingStore((s) => s.setIdentity);
   const [createOpen, setCreateOpen] = useState(false);
+  const [adminOpen, setAdminOpen] = useState(false);
+  const isAdmin = useBettingStore((s) => s.isAdmin);
   /** Phone/tablet only: which pane is visible. On wide screens both show side by side. */
   const [tab, setTab] = useState<"markets" | "leaderboard">("markets");
 
@@ -27,13 +30,14 @@ export default function Home() {
   useSocket(identity);
 
   const closeCreate = useCallback(() => setCreateOpen(false), []);
+  const closeAdmin = useCallback(() => setAdminOpen(false), []);
 
   if (!identityLoaded) return <main className="flex-1" />;
   if (!identity) return <JoinScreen />;
 
   return (
     <>
-      <Navbar onCreateMarket={() => setCreateOpen(true)} />
+      <Navbar onCreateMarket={() => setCreateOpen(true)} onOpenAdmin={() => setAdminOpen(true)} />
       <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-6">
         <div className="mb-4 grid grid-cols-2 rounded-lg border border-zinc-800 bg-zinc-900 p-1 lg:hidden" role="tablist">
           {(["markets", "leaderboard"] as const).map((t) => (
@@ -57,10 +61,20 @@ export default function Home() {
           </div>
           <aside className={`lg:sticky lg:top-20 ${tab === "leaderboard" ? "" : "hidden lg:block"}`}>
             <Leaderboard />
+            {!isAdmin && (
+              <button
+                type="button"
+                onClick={() => setAdminOpen(true)}
+                className="mt-3 w-full text-center text-[11px] text-zinc-600 transition hover:text-zinc-400"
+              >
+                Admin login
+              </button>
+            )}
           </aside>
         </div>
       </main>
       <CreateMarketModal open={createOpen} onClose={closeCreate} />
+      <AdminModal open={adminOpen} onClose={closeAdmin} />
       <Toasts />
     </>
   );

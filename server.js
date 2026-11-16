@@ -18,6 +18,11 @@
  *    (of the total points staked) for the Referee on top. Losing stakes are gone.
  *  - VOID refunds every wager in full.
  *
+ * Admin (only if the ADMIN_PASSWORD env var is set): ADMIN_LOGIN with the password returns a
+ * token (HMAC of the user id) that the client re-sends on REGISTER_USER. An admin may adjust
+ * balances, rename/remove users, void markets or single bets, and close/settle any market.
+ * Settled markets are final, even for an admin.
+ *
  * Pricing (fixed odds, locked per bet):
  *  - The creator sets a starting probability for option A (1–99%). It splits a virtual
  *    seed of ODDS_SEED points: seedA = ODDS_SEED * p, seedB = ODDS_SEED * (1 - p).
@@ -34,6 +39,7 @@
  */
 
 const http = require("node:http");
+const crypto = require("node:crypto");
 const { Server } = require("socket.io");
 const { v4: uuidv4 } = require("uuid");
 const persistence = require("./persistence");
@@ -51,7 +57,8 @@ const persistence = require("./persistence");
 /** @typedef {import("./lib/types").LeaderboardEntry} LeaderboardEntry */
 /** @typedef {import("./lib/types").ClientToServerEvents} ClientToServerEvents */
 /** @typedef {import("./lib/types").ServerToClientEvents} ServerToClientEvents */
-/** @typedef {{ userId?: string }} SocketData */
+/** @typedef {import("./lib/types").AdminMarketBets} AdminMarketBets */
+/** @typedef {{ userId?: string, isAdmin?: boolean, failedAdminLogins?: number }} SocketData */
 /** @typedef {import("socket.io").Socket<ClientToServerEvents, ServerToClientEvents, Record<string, never>, SocketData>} AppSocket */
 
 /**
@@ -103,6 +110,13 @@ const MAX_OPTION_LEN = 32;
 const MAX_USERNAME_LEN = 24;
 /** @type {readonly OptionId[]} */
 const OPTION_IDS = ["A", "B"];
+/** Unlocks admin rights; admin is disabled when unset. */
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? "";
+/** Wrong passwords allowed per connection before ADMIN_LOGIN stops answering. */
+const MAX_ADMIN_LOGIN_FAILURES = 5;
+const MAX_ADMIN_REASON_LEN = 80;
+/** Largest single balance adjustment. */
+const MAX_ADMIN_DELTA = 1_000_000;
 
 // ---------------------------------------------------------------------------
 // In-memory state
@@ -125,6 +139,20 @@ const timers = new Map();
 
 /** @param {string} userId */
 const userRoom = (userId) => `user:${userId}`;
+
+/** Admin token for a user: only someone who knows ADMIN_PASSWORD can produce it. @param {string} userId */
+const adminToken = (userId) => crypto.createHmac("sha256", ADMIN_PASSWORD).update(`admin:${userId}`).digest("hex");
+
+/** Constant-time string comparison (via hashes, so lengths need not match). @param {string} a @param {string} b */
+function safeEqual(a, b) {
+  const ha = crypto.createHash("sha256").update(a).digest();
+  const hb = crypto.createHash("sha256").update(b).digest();
+  return crypto.timingSafeEqual(ha, hb);
+}
+
+/** @param {string} userId @param {unknown} token */
+const isValidAdminToken = (userId, token) =>
+  ADMIN_PASSWORD !== "" && typeof token === "string" && safeEqual(token, adminToken(userId));
 
 /**
  * @param {unknown} value
@@ -273,6 +301,25 @@ function scheduleLeaderboard() {
 /** @param {string} userId @param {PayoutNotice} notice */
 function notify(userId, notice) {
   io.to(userRoom(userId)).emit("PAYOUT", notice);
+}
+
+/** Broadcast a market's current pools and odds. @param {MarketRecord} m */
+function emitOdds(m) {
+  const p = getPools(m.id);
+  io.emit("ODDS_UPDATE", {
+    marketId: m.id,
+    pools: p,
+    totalPool: p.A + p.B,
+    odds: computeOdds(m, p),
+    bettorCount: bettorCount(m.id),
+  });
+}
+
+/** Remove bets from a market's pools (when a bet is cancelled). @param {string} marketId @param {PlacedBet[]} list */
+function unstake(marketId, list) {
+  const pool = pools.get(marketId);
+  if (!pool) return;
+  for (const b of list) pool.set(b.optionId, Math.max(0, (pool.get(b.optionId) ?? 0) - b.amount));
 }
 
 // ---------------------------------------------------------------------------
@@ -622,16 +669,16 @@ function onConnection(socket) {
     const username = cleanString(payload?.username, MAX_USERNAME_LEN);
     if (!userId || !username) return ack({ ok: false, error: "Invalid user id or username" });
 
+    // An existing user keeps the server's name, so an admin rename sticks.
     let user = users.get(userId);
     if (!user) {
       user = { id: userId, username, balance: STARTING_BALANCE };
       users.set(userId, user);
       console.log(`[register] ${username} (${userId})`);
-    } else {
-      user.username = username;
     }
 
     socket.data.userId = userId;
+    socket.data.isAdmin = isValidAdminToken(userId, payload?.adminToken);
     socket.join(userRoom(userId));
 
     ack({
@@ -642,6 +689,7 @@ function onConnection(socket) {
         myBets: myBetsFor(userId),
         leaderboard: buildLeaderboard(),
         serverNow: Date.now(),
+        isAdmin: socket.data.isAdmin,
       },
     });
     scheduleLeaderboard();
@@ -741,14 +789,7 @@ function onConnection(socket) {
     byUser.set(user.id, mine);
     // -----------------------------------
 
-    const p = getPools(m.id);
-    io.emit("ODDS_UPDATE", {
-      marketId: m.id,
-      pools: p,
-      totalPool: p.A + p.B,
-      odds: computeOdds(m, p),
-      bettorCount: bettorCount(m.id),
-    });
+    emitOdds(m);
     scheduleLeaderboard();
     markDirty();
     // Sync any other tabs of the same user.
@@ -762,16 +803,25 @@ function onConnection(socket) {
 
     const m = typeof payload?.marketId === "string" ? markets.get(payload.marketId) : undefined;
     if (!m) return ack({ ok: false, error: "Market not found" });
-    if (m.creatorId !== user.id) return ack({ ok: false, error: "Only the market's creator (its Referee) can close betting" });
-    if (m.expiresAt !== null) return ack({ ok: false, error: "Timed markets close automatically" });
+    const admin = socket.data.isAdmin === true;
+    if (m.creatorId !== user.id && !admin) return ack({ ok: false, error: "Only the market's creator (its Referee) can close betting" });
     if (m.status !== "OPEN") return ack({ ok: false, error: "Betting is already closed" });
+    if (m.expiresAt !== null) {
+      if (!admin) return ack({ ok: false, error: "Timed markets close automatically" });
+      // Admin closing a timed market early: lock it now, which starts the Referee's settle window.
+      clearTimer(m.id);
+      lockMarket(m.id);
+      ack({ ok: true, data: null });
+      console.log(`[admin] ${user.username} closed betting early on ${m.id} "${m.title}"`);
+      return;
+    }
 
     // The auto-void timer set at creation keeps running; there's no extra settle rush.
     m.status = "LOCKED";
     io.emit("MARKET_UPDATED", serializeMarket(m));
     markDirty();
     ack({ ok: true, data: null });
-    console.log(`[close] ${m.id} "${m.title}" betting closed by referee`);
+    console.log(`[close] ${m.id} "${m.title}" betting closed by ${m.creatorId === user.id ? "referee" : `admin ${user.username}`}`);
   });
 
   socket.on("SETTLE_MARKET", (payload, ack) => {
@@ -780,12 +830,200 @@ function onConnection(socket) {
 
     const m = typeof payload?.marketId === "string" ? markets.get(payload.marketId) : undefined;
     if (!m) return ack({ ok: false, error: "Market not found" });
-    if (m.creatorId !== user.id) return ack({ ok: false, error: "Only the market's creator (its Referee) can settle it" });
+    if (m.creatorId !== user.id && !socket.data.isAdmin) {
+      return ack({ ok: false, error: "Only the market's creator (its Referee) can settle it" });
+    }
     if (m.status !== "OPEN" && m.status !== "LOCKED") return ack({ ok: false, error: "Market is already resolved" });
     if (!isOptionId(payload?.winningOption)) return ack({ ok: false, error: "Invalid winning option" });
 
+    if (m.creatorId !== user.id) console.log(`[admin] ${user.username} settles ${m.id} on behalf of the referee`);
     settleMarket(m, payload.winningOption);
     ack({ ok: true, data: null });
+  });
+
+  registerAdminHandlers(socket, currentUser);
+}
+
+// ---------------------------------------------------------------------------
+// Admin handlers
+// ---------------------------------------------------------------------------
+
+/**
+ * @param {AppSocket} socket
+ * @param {() => User | null} currentUser
+ */
+function registerAdminHandlers(socket, currentUser) {
+  /**
+   * The acting admin, or an error ack already sent.
+   * @param {(res: { ok: false, error: string }) => void} ack
+   * @returns {User | null}
+   */
+  const requireAdmin = (ack) => {
+    const user = currentUser();
+    if (!user) {
+      ack({ ok: false, error: "Register first" });
+      return null;
+    }
+    if (!socket.data.isAdmin) {
+      ack({ ok: false, error: "Admin only" });
+      return null;
+    }
+    return user;
+  };
+
+  /** @param {unknown} marketId */
+  const unresolvedMarket = (marketId) => {
+    const m = typeof marketId === "string" ? markets.get(marketId) : undefined;
+    if (!m) return { error: "Market not found" };
+    if (m.status !== "OPEN" && m.status !== "LOCKED") return { error: "Market is already resolved; settled results are final" };
+    return { m };
+  };
+
+  socket.on("ADMIN_LOGIN", (payload, ack) => {
+    const user = currentUser();
+    if (!user) return ack({ ok: false, error: "Register first" });
+    if (!ADMIN_PASSWORD) return ack({ ok: false, error: "Admin is not enabled on this server (ADMIN_PASSWORD not set)" });
+    const failures = socket.data.failedAdminLogins ?? 0;
+    if (failures >= MAX_ADMIN_LOGIN_FAILURES) return ack({ ok: false, error: "Too many attempts; reload the page to try again" });
+    if (typeof payload?.password !== "string" || !safeEqual(payload.password, ADMIN_PASSWORD)) {
+      socket.data.failedAdminLogins = failures + 1;
+      console.warn(`[admin] failed login by ${user.username} (${user.id})`);
+      return ack({ ok: false, error: "Wrong password" });
+    }
+    socket.data.failedAdminLogins = 0;
+    socket.data.isAdmin = true;
+    console.log(`[admin] ${user.username} (${user.id}) logged in`);
+    ack({ ok: true, data: { token: adminToken(user.id) } });
+  });
+
+  socket.on("ADMIN_LOGOUT", (_payload, ack) => {
+    socket.data.isAdmin = false;
+    ack({ ok: true, data: null });
+  });
+
+  socket.on("ADMIN_ADJUST_BALANCE", (payload, ack) => {
+    const admin = requireAdmin(ack);
+    if (!admin) return;
+    const target = typeof payload?.userId === "string" ? users.get(payload.userId) : undefined;
+    if (!target) return ack({ ok: false, error: "User not found" });
+    const delta = payload?.delta;
+    if (!Number.isInteger(delta) || delta === 0 || Math.abs(delta) > MAX_ADMIN_DELTA) {
+      return ack({ ok: false, error: `Amount must be a non-zero whole number up to ${MAX_ADMIN_DELTA.toLocaleString("en-US")}` });
+    }
+    if (target.balance + delta < 0) {
+      return ack({ ok: false, error: `${target.username} only has ${target.balance} pts; the balance can't go below 0` });
+    }
+    const reason = payload?.reason === undefined || payload.reason === "" ? null : cleanString(payload.reason, MAX_ADMIN_REASON_LEN);
+    if (payload?.reason && !reason) return ack({ ok: false, error: `Reason is too long (max ${MAX_ADMIN_REASON_LEN} chars)` });
+
+    creditUser(target.id, delta);
+    notify(target.id, { marketId: "", title: reason ?? "Balance adjusted by an admin", kind: "ADMIN", amount: delta });
+    scheduleLeaderboard();
+    markDirty();
+    ack({ ok: true, data: { balance: target.balance } });
+    console.log(`[admin] ${admin.username} adjusted ${target.username} by ${delta} → ${target.balance}${reason ? ` (${reason})` : ""}`);
+  });
+
+  socket.on("ADMIN_RENAME_USER", (payload, ack) => {
+    const admin = requireAdmin(ack);
+    if (!admin) return;
+    const target = typeof payload?.userId === "string" ? users.get(payload.userId) : undefined;
+    if (!target) return ack({ ok: false, error: "User not found" });
+    const username = cleanString(payload?.username, MAX_USERNAME_LEN);
+    if (!username) return ack({ ok: false, error: `Username is required (max ${MAX_USERNAME_LEN} chars)` });
+
+    const old = target.username;
+    target.username = username;
+    io.to(userRoom(target.id)).emit("USER_UPDATE", { ...target });
+    // Referee names are part of the market payload.
+    for (const m of markets.values()) {
+      if (m.creatorId === target.id) io.emit("MARKET_UPDATED", serializeMarket(m));
+    }
+    scheduleLeaderboard();
+    markDirty();
+    ack({ ok: true, data: null });
+    console.log(`[admin] ${admin.username} renamed ${old} → ${username} (${target.id})`);
+  });
+
+  socket.on("ADMIN_REMOVE_USER", (payload, ack) => {
+    const admin = requireAdmin(ack);
+    if (!admin) return;
+    const target = typeof payload?.userId === "string" ? users.get(payload.userId) : undefined;
+    if (!target) return ack({ ok: false, error: "User not found" });
+    if (target.id === admin.id) return ack({ ok: false, error: "You can't remove yourself" });
+
+    // Cancel their bets in unresolved markets (the stakes leave the pools). Resolved history stays.
+    for (const [marketId, byUser] of bets) {
+      const m = markets.get(marketId);
+      const list = byUser.get(target.id);
+      if (!m || !list || (m.status !== "OPEN" && m.status !== "LOCKED")) continue;
+      unstake(marketId, list);
+      byUser.delete(target.id);
+      emitOdds(m);
+    }
+    users.delete(target.id);
+    // Markets they referee stay; an admin can settle or void them.
+    // Their open sockets now fail every action ("Register first"); the client forgets its identity.
+    io.to(userRoom(target.id)).emit("ACCOUNT_REMOVED");
+    io.in(userRoom(target.id)).socketsLeave(userRoom(target.id));
+    scheduleLeaderboard();
+    markDirty();
+    ack({ ok: true, data: null });
+    console.log(`[admin] ${admin.username} removed user ${target.username} (${target.id})`);
+  });
+
+  socket.on("ADMIN_VOID_MARKET", (payload, ack) => {
+    const admin = requireAdmin(ack);
+    if (!admin) return;
+    const { m, error } = unresolvedMarket(payload?.marketId);
+    if (!m) return ack({ ok: false, error: /** @type {string} */ (error) });
+    const extra = payload?.reason ? cleanString(payload.reason, MAX_ADMIN_REASON_LEN) : null;
+    if (payload?.reason && !extra) return ack({ ok: false, error: `Reason is too long (max ${MAX_ADMIN_REASON_LEN} chars)` });
+
+    console.log(`[admin] ${admin.username} voids ${m.id}`);
+    voidMarket(m.id, extra ? `Voided by an admin: ${extra}` : "Voided by an admin");
+    ack({ ok: true, data: null });
+  });
+
+  socket.on("ADMIN_VOID_BET", (payload, ack) => {
+    const admin = requireAdmin(ack);
+    if (!admin) return;
+    const { m, error } = unresolvedMarket(payload?.marketId);
+    if (!m) return ack({ ok: false, error: /** @type {string} */ (error) });
+    const byUser = bets.get(m.id);
+    const userId = payload?.userId;
+    const list = typeof userId === "string" ? byUser?.get(userId) : undefined;
+    const index = list?.findIndex((b) => b.id === payload?.betId) ?? -1;
+    if (!byUser || !list || typeof userId !== "string" || index < 0) return ack({ ok: false, error: "Bet not found" });
+
+    const [bet] = list.splice(index, 1);
+    unstake(m.id, [bet]);
+    if (list.length === 0) byUser.delete(userId);
+    creditUser(userId, bet.amount);
+    notify(userId, { marketId: m.id, title: m.title, kind: "REFUND", amount: bet.amount });
+    io.to(userRoom(userId)).emit("MY_BETS_UPDATE", { marketId: m.id, bets: list.map((b) => ({ ...b })) });
+    emitOdds(m);
+    scheduleLeaderboard();
+    markDirty();
+    ack({ ok: true, data: null });
+    console.log(`[admin] ${admin.username} voided a ${bet.amount} pt bet by ${users.get(userId)?.username ?? userId} on ${m.id}`);
+  });
+
+  socket.on("ADMIN_GET_BETS", (payload, ack) => {
+    if (!requireAdmin(ack)) return;
+    const marketId = payload?.marketId;
+    const byUser = typeof marketId === "string" ? bets.get(marketId) : undefined;
+    if (typeof marketId !== "string" || !byUser) return ack({ ok: false, error: "Market not found" });
+    /** @type {AdminMarketBets} */
+    const data = {
+      marketId,
+      bettors: [...byUser].map(([userId, list]) => ({
+        userId,
+        username: users.get(userId)?.username ?? "removed user",
+        bets: list.map((b) => ({ ...b })),
+      })),
+    };
+    ack({ ok: true, data });
   });
 }
 
