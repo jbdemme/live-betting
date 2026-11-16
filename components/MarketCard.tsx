@@ -333,18 +333,8 @@ function RefereePanel({ market, now, isReferee, pending, onCloseBetting, onSettl
     );
   }
 
-  // Someone else created this market, so they referee it.
-  if (!isReferee) {
-    return (
-      <div className="mt-4 flex items-center gap-2 border-t border-zinc-800 pt-3 text-xs text-zinc-400">
-        <span className="rounded-md border border-zinc-700 bg-zinc-800 px-1.5 py-0.5 font-semibold text-zinc-300">
-          Referee
-        </span>
-        <span className="truncate">{market.creatorName}</span>
-        {market.status === "LOCKED" && <span className="ml-auto text-amber-300/80">awaiting ruling…</span>}
-      </div>
-    );
-  }
+  // Someone else referees this market; the header already names them and the timer shows the ruling deadline.
+  if (!isReferee) return null;
 
   // You created this market, so you referee it.
   const bounty = Math.round(market.totalPool * 0.05);
