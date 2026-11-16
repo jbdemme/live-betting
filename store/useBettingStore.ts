@@ -5,8 +5,8 @@ import type {
   MyBets,
   OddsUpdatePayload,
   PayoutNotice,
+  PlacedBet,
   SessionSnapshot,
-  Stake,
   User,
 } from "@/lib/types";
 
@@ -28,7 +28,7 @@ interface BettingState {
   identityLoaded: boolean;
   connection: ConnectionStatus;
   currentUser: User | null;
-  /** Markets keyed by id (live parimutuel odds are carried on each market). */
+  /** Markets keyed by id (current odds are carried on each market). */
   markets: Record<string, Market>;
   myBets: MyBets;
   /** All users ranked by balance + points at stake, best first. */
@@ -43,7 +43,7 @@ interface BettingState {
   upsertMarket: (market: Market) => void;
   applyOdds: (update: OddsUpdatePayload) => void;
   setBalance: (balance: number) => void;
-  setStake: (marketId: string, stake: Stake) => void;
+  setMyBets: (marketId: string, bets: PlacedBet[]) => void;
   setLeaderboard: (entries: LeaderboardEntry[]) => void;
   pushToast: (notice: PayoutNotice) => void;
   dismissToast: (id: string) => void;
@@ -89,7 +89,7 @@ export const useBettingStore = create<BettingState>()((set) => ({
   setBalance: (balance) =>
     set((s) => (s.currentUser ? { currentUser: { ...s.currentUser, balance } } : s)),
 
-  setStake: (marketId, stake) => set((s) => ({ myBets: { ...s.myBets, [marketId]: stake } })),
+  setMyBets: (marketId, bets) => set((s) => ({ myBets: { ...s.myBets, [marketId]: bets } })),
 
   setLeaderboard: (leaderboard) => set({ leaderboard }),
 
@@ -103,9 +103,9 @@ export const useBettingStore = create<BettingState>()((set) => ({
 // Derived selectors / helpers
 // ---------------------------------------------------------------------------
 
-export const EMPTY_STAKE: Stake = { A: 0, B: 0 };
+export const EMPTY_BETS: PlacedBet[] = [];
 
-export const stakeTotal = (stake: Stake): number => stake.A + stake.B;
+export const betsTotal = (bets: PlacedBet[]): number => bets.reduce((sum, b) => sum + b.amount, 0);
 
 const isActive = (m: Market): boolean => m.status === "OPEN" || m.status === "LOCKED";
 
