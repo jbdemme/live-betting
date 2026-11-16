@@ -27,10 +27,11 @@ Tap **+ Create Market**. You become its **Referee**:
 - Optional: tap **+1** on the card each time the event happens (e.g. every "good contribution"), so bettors can see the count so far.
 
 Pick a timer (30s–10m) or **No limit** (you close betting yourself).
+On timed markets, **betting closes after 80% of the time**: in a 5-minute market nobody can bet during the last minute.
 
 ## Refunds
 Everyone is refunded if the Referee doesn't decide in time:
-- **Timed markets:** within 1 hour after betting closes.
+- **Timed markets:** within 1 hour after the timer ends.
 - **No-limit markets:** within 3 hours of creating the market.
 
 ## Fine print

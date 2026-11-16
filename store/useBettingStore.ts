@@ -121,7 +121,7 @@ const isActive = (m: Market): boolean => m.status === "OPEN" || m.status === "LO
 
 /** Next deadline that matters for a market (no-time-limit markets fall back to their auto-void time). */
 const nextDeadline = (m: Market): number =>
-  (m.status === "OPEN" ? m.expiresAt : null) ?? m.settleDeadline ?? Number.MAX_SAFE_INTEGER;
+  (m.status === "OPEN" ? m.bettingClosesAt : null) ?? m.settleDeadline ?? Number.MAX_SAFE_INTEGER;
 
 /** Active markets, soonest deadline first. */
 export function selectActiveMarkets(markets: Record<string, Market>): Market[] {

@@ -69,8 +69,8 @@ or change the password. An admin can:
 - **Users** (Admin button in the navbar): add/subtract points (balance can't go below 0; the user sees a
   toast with the optional reason), rename a user, or remove a user (their bets in open markets are cancelled
   without refund; if they come back they start over at 1,000 pts).
-- **Markets** (violet Admin box on each live market): close betting (also on timed markets, which starts the
-  Referee's 1-hour ruling window), settle on the Referee's behalf (the bounty still goes to the Referee),
+- **Markets** (violet Admin box on each live market): close betting (also early on timed markets; the
+  Referee's 1-hour ruling window still runs from the end of the timer), settle on the Referee's behalf (the bounty still goes to the Referee),
   void the market with an optional reason, or list every bet and void (refund) single ones. Other bets keep
   their locked odds.
 - Settled and voided markets are final, even for an admin; correct mistakes by adjusting points.
@@ -79,8 +79,9 @@ or change the password. An admin can:
 
 - New users start with **1,000 pts**.
 - Whoever **creates** a market is its **Referee**. They can't bet on it, and only they can declare the outcome.
-- **Timed markets** (30s–10m): when the timer ends the market **locks**, and the Referee has **1 hour**
-  to declare the winner, or it auto-voids.
+- **Timed markets** (30s–10m): betting closes after **80%** of the time (a 5-minute market **locks** at
+  4:00, so nobody can bet in the last minute). After the timer ends, the Referee has **1 hour** to declare
+  the winner, or it auto-voids.
 - **No-limit markets** (e.g. "Prof says 'essentially' 10+ times in the rest of the lecture"): betting
   stays open until the Referee taps **Close betting**; they then declare the outcome whenever it's known.
   If it isn't settled within **3 hours** of creation, it auto-voids.

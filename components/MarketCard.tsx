@@ -47,7 +47,7 @@ export default function MarketCard({ market }: { market: Market }) {
   const myTotal = betsTotal(myBets);
   // A user backs only one side per market.
   const backedSide: OptionId | null = myBets[0]?.optionId ?? null;
-  const bettingOpen = market.status === "OPEN" && (market.expiresAt === null || now < market.expiresAt);
+  const bettingOpen = market.status === "OPEN" && (market.bettingClosesAt === null || now < market.bettingClosesAt);
   const resolved = market.status === "SETTLED" || market.status === "VOID";
 
   const run = async (action: () => Promise<Ack>) => {
@@ -227,15 +227,24 @@ function Timer({ market, now }: { market: Market; now: number }) {
       </div>
     );
   }
-  if (market.status === "OPEN" && market.expiresAt !== null) {
-    const remaining = market.expiresAt - now;
+  if (market.status === "OPEN" && market.bettingClosesAt !== null && now < market.bettingClosesAt) {
+    const remaining = market.bettingClosesAt - now;
     const urgent = remaining < 15_000;
     return (
       <div className="text-right">
-        <div className="text-[10px] uppercase tracking-wider text-zinc-500">Closes in</div>
+        <div className="text-[10px] uppercase tracking-wider text-zinc-500">Betting closes in</div>
         <div className={`font-mono text-xl font-bold tabular-nums ${urgent ? "animate-pulse text-rose-400" : "text-zinc-100"}`}>
           {formatCountdown(remaining)}
         </div>
+      </div>
+    );
+  }
+  // Timed market in its final stretch: betting is closed but the event is still running.
+  if ((market.status === "OPEN" || market.status === "LOCKED") && market.expiresAt !== null && now < market.expiresAt) {
+    return (
+      <div className="text-right">
+        <div className="text-[10px] uppercase tracking-wider text-zinc-500">Betting closed · ends in</div>
+        <div className="font-mono text-xl font-bold tabular-nums text-zinc-100">{formatCountdown(market.expiresAt - now)}</div>
       </div>
     );
   }
@@ -394,7 +403,10 @@ function refereeHint(market: Market, now: number): string {
       ? `No time limit: close betting once the outcome gets predictable, then declare it. Unsettled markets refund everyone in ${deadline}.`
       : `Betting closed. Declare the outcome once it's known (within ${deadline}, or everyone is refunded).`;
   }
+  if (market.status === "LOCKED" && market.expiresAt > now) {
+    return `Betting closed; the market runs for another ${formatCountdown(market.expiresAt - now)}. Declare the outcome once it's known (within 1 hour after it ends, or the market is voided).`;
+  }
   return market.status === "LOCKED" && deadline
     ? `Betting closed. Declare the outcome within ${deadline} or the market is voided.`
-    : "You created this market, so you can't bet on it. Declare the outcome once it happens — settling ends betting immediately.";
+    : "You created this market, so you can't bet on it. Betting closes after 80% of the time; declare the outcome once it happens — settling ends betting immediately.";
 }

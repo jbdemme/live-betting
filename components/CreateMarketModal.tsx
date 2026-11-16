@@ -160,7 +160,7 @@ function CreateMarketForm({ onClose }: { onClose: () => void }) {
         </label>
 
         <fieldset className="space-y-1.5">
-          <legend className="text-xs font-medium uppercase tracking-wide text-zinc-400">Betting window</legend>
+          <legend className="text-xs font-medium uppercase tracking-wide text-zinc-400">Market duration</legend>
           <div className="mt-1.5 flex gap-1.5">
             {DURATIONS.map((d) => (
               <button
@@ -183,7 +183,7 @@ function CreateMarketForm({ onClose }: { onClose: () => void }) {
             you 5% of all points staked.{" "}
             {durationSec === null
               ? "Betting stays open until you close it. If you don't declare the outcome within 3 hours, all wagers are refunded."
-              : "After betting closes you have 1 hour to declare it, or all wagers are refunded."}
+              : "Betting closes after 80% of the time (e.g. at 4:00 in a 5-minute market), so nobody can bet in the final stretch. After the market ends you have 1 hour to declare the outcome, or all wagers are refunded."}
           </p>
         </fieldset>
 
