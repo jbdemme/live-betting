@@ -9,6 +9,7 @@ const KIND_STYLE: Record<Toast["kind"], { label: string; cls: string; sign: stri
   LOSS: { label: "You lost", cls: "border-rose-500/40 text-rose-200", sign: "−" },
   REFUND: { label: "Refunded", cls: "border-zinc-600 text-zinc-200", sign: "+" },
   BOUNTY: { label: "Referee bounty", cls: "border-amber-400/40 text-amber-200", sign: "+" },
+  ADMIN: { label: "Admin adjustment", cls: "border-violet-400/40 text-violet-200", sign: "" },
 };
 
 function ToastItem({ toast }: { toast: Toast }) {
@@ -29,8 +30,8 @@ function ToastItem({ toast }: { toast: Toast }) {
       <div className="flex items-baseline justify-between gap-2">
         <span className="text-sm font-semibold">{style.label}</span>
         <span className="font-mono text-sm font-bold tabular-nums">
-          {style.sign}
-          {formatPts(toast.amount)} pts
+          {toast.kind === "ADMIN" ? (toast.amount >= 0 ? "+" : "−") : style.sign}
+          {formatPts(Math.abs(toast.amount))} pts
         </span>
       </div>
       <p className="mt-0.5 truncate text-xs text-zinc-400">{toast.title}</p>

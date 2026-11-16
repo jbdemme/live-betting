@@ -77,7 +77,10 @@ export type MyBets = Record<string, PlacedBet[]>;
 export interface RegisterUserPayload {
   /** Persisted client id; reused on reconnect so the balance survives refreshes. */
   userId: string;
+  /** Used only when the user is new; an existing user keeps the server's name (an admin may have renamed them). */
   username: string;
+  /** Token from ADMIN_LOGIN, re-sent on every connect to keep admin rights. */
+  adminToken?: string;
 }
 
 export interface CreateMarketPayload {
@@ -122,6 +125,8 @@ export interface SessionSnapshot {
   /** All users, best first. */
   leaderboard: LeaderboardEntry[];
   serverNow: number;
+  /** True if `adminToken` was valid. */
+  isAdmin: boolean;
 }
 
 export interface OddsUpdatePayload {
@@ -135,8 +140,32 @@ export interface OddsUpdatePayload {
 export interface PayoutNotice {
   marketId: string;
   title: string;
-  kind: "WIN" | "LOSS" | "REFUND" | "BOUNTY";
+  /** ADMIN: an admin changed the balance; `amount` is signed and `title` holds the reason. */
+  kind: "WIN" | "LOSS" | "REFUND" | "BOUNTY" | "ADMIN";
   amount: number;
+}
+
+// ---------------------------------------------------------------------------
+// Admin (unlocked with the ADMIN_PASSWORD env var on the server)
+// ---------------------------------------------------------------------------
+
+export interface AdminAdjustPayload {
+  userId: string;
+  /** Non-zero integer; the resulting balance may not go below 0. */
+  delta: number;
+  reason?: string;
+}
+
+export interface AdminVoidBetPayload {
+  marketId: string;
+  userId: string;
+  betId: string;
+}
+
+/** Every user's bets on one market, for the admin panel. */
+export interface AdminMarketBets {
+  marketId: string;
+  bettors: { userId: string; username: string; bets: PlacedBet[] }[];
 }
 
 // ---------------------------------------------------------------------------
@@ -150,6 +179,20 @@ export interface ClientToServerEvents {
   /** Creator-only, no-time-limit markets: stop betting before declaring the outcome. */
   CLOSE_BETTING: (payload: { marketId: string }, ack: (res: Ack) => void) => void;
   SETTLE_MARKET: (payload: SettleMarketPayload, ack: (res: Ack) => void) => void;
+
+  // Admin. CLOSE_BETTING and SETTLE_MARKET above also accept an admin on any market
+  // (an admin may close a timed market early, too).
+  ADMIN_LOGIN: (payload: { password: string }, ack: (res: Ack<{ token: string }>) => void) => void;
+  ADMIN_LOGOUT: (payload: Record<string, never>, ack: (res: Ack) => void) => void;
+  ADMIN_ADJUST_BALANCE: (payload: AdminAdjustPayload, ack: (res: Ack<{ balance: number }>) => void) => void;
+  ADMIN_RENAME_USER: (payload: { userId: string; username: string }, ack: (res: Ack) => void) => void;
+  /** Deletes the user; their bets in unresolved markets are cancelled (no refund, the account is gone). */
+  ADMIN_REMOVE_USER: (payload: { userId: string }, ack: (res: Ack) => void) => void;
+  /** Void an OPEN/LOCKED market and refund every bet. */
+  ADMIN_VOID_MARKET: (payload: { marketId: string; reason?: string }, ack: (res: Ack) => void) => void;
+  /** Cancel and refund one bet on an OPEN/LOCKED market. Other bets keep their locked odds. */
+  ADMIN_VOID_BET: (payload: AdminVoidBetPayload, ack: (res: Ack) => void) => void;
+  ADMIN_GET_BETS: (payload: { marketId: string }, ack: (res: Ack<AdminMarketBets>) => void) => void;
 }
 
 export interface ServerToClientEvents {
@@ -163,4 +206,10 @@ export interface ServerToClientEvents {
   PAYOUT: (notice: PayoutNotice) => void;
   /** Full ranking, best first; sent (debounced) whenever totals or online status change. */
   LEADERBOARD_UPDATE: (entries: LeaderboardEntry[]) => void;
+  /** The user's bets on a market changed without them placing one (an admin voided a bet). */
+  MY_BETS_UPDATE: (payload: { marketId: string; bets: PlacedBet[] }) => void;
+  /** The user's profile changed (an admin renamed them). */
+  USER_UPDATE: (user: User) => void;
+  /** An admin deleted this account; the client should forget its identity. */
+  ACCOUNT_REMOVED: () => void;
 }

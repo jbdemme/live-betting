@@ -12,12 +12,14 @@ const CONNECTION_STYLE: Record<ConnectionStatus, { dot: string; label: string }>
 
 interface NavbarProps {
   onCreateMarket: () => void;
+  onOpenAdmin: () => void;
 }
 
-export default function Navbar({ onCreateMarket }: NavbarProps) {
+export default function Navbar({ onCreateMarket, onOpenAdmin }: NavbarProps) {
   const user = useBettingStore((s) => s.currentUser);
   const identity = useBettingStore((s) => s.identity);
   const connection = useBettingStore((s) => s.connection);
+  const isAdmin = useBettingStore((s) => s.isAdmin);
   const conn = CONNECTION_STYLE[connection];
   const username = user?.username ?? identity?.username ?? "";
 
@@ -43,6 +45,16 @@ export default function Navbar({ onCreateMarket }: NavbarProps) {
           >
             {user ? formatPts(user.balance) : "—"} <span className="text-emerald-400/70">pts</span>
           </div>
+
+          {isAdmin && (
+            <button
+              type="button"
+              onClick={onOpenAdmin}
+              className="rounded-lg border border-violet-500/40 bg-violet-500/10 px-3 py-1.5 text-sm font-semibold text-violet-200 transition hover:bg-violet-500/20"
+            >
+              Admin
+            </button>
+          )}
 
           <button
             type="button"

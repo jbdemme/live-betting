@@ -1,6 +1,9 @@
 import { io, type Socket } from "socket.io-client";
 import type {
   Ack,
+  AdminAdjustPayload,
+  AdminMarketBets,
+  AdminVoidBetPayload,
   ClientToServerEvents,
   CreateMarketPayload,
   Market,
@@ -76,6 +79,99 @@ export async function settleMarket(marketId: string, winningOption: OptionId): P
     return await getSocket()
       .timeout(ACK_TIMEOUT_MS)
       .emitWithAck("SETTLE_MARKET", { marketId, winningOption });
+  } catch (err) {
+    return failure(err);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Admin
+// ---------------------------------------------------------------------------
+
+const ADMIN_TOKEN_KEY = "live-betting:admin-token";
+
+export function loadAdminToken(): string | undefined {
+  try {
+    return window.localStorage.getItem(ADMIN_TOKEN_KEY) ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function saveAdminToken(token: string | null): void {
+  try {
+    if (token) window.localStorage.setItem(ADMIN_TOKEN_KEY, token);
+    else window.localStorage.removeItem(ADMIN_TOKEN_KEY);
+  } catch {
+    // Storage unavailable: admin lasts until the page reloads.
+  }
+}
+
+export async function adminLogin(password: string): Promise<Ack> {
+  try {
+    const res = await getSocket().timeout(ACK_TIMEOUT_MS).emitWithAck("ADMIN_LOGIN", { password });
+    if (!res.ok) return res;
+    saveAdminToken(res.data.token);
+    useBettingStore.getState().setIsAdmin(true);
+    return { ok: true, data: null };
+  } catch (err) {
+    return failure(err);
+  }
+}
+
+export async function adminLogout(): Promise<void> {
+  saveAdminToken(null);
+  useBettingStore.getState().setIsAdmin(false);
+  try {
+    await getSocket().timeout(ACK_TIMEOUT_MS).emitWithAck("ADMIN_LOGOUT", {});
+  } catch {
+    // The token is gone locally; the server drops admin on the next connect anyway.
+  }
+}
+
+export async function adminAdjustBalance(payload: AdminAdjustPayload): Promise<Ack<{ balance: number }>> {
+  try {
+    return await getSocket().timeout(ACK_TIMEOUT_MS).emitWithAck("ADMIN_ADJUST_BALANCE", payload);
+  } catch (err) {
+    return failure(err);
+  }
+}
+
+export async function adminRenameUser(userId: string, username: string): Promise<Ack> {
+  try {
+    return await getSocket().timeout(ACK_TIMEOUT_MS).emitWithAck("ADMIN_RENAME_USER", { userId, username });
+  } catch (err) {
+    return failure(err);
+  }
+}
+
+export async function adminRemoveUser(userId: string): Promise<Ack> {
+  try {
+    return await getSocket().timeout(ACK_TIMEOUT_MS).emitWithAck("ADMIN_REMOVE_USER", { userId });
+  } catch (err) {
+    return failure(err);
+  }
+}
+
+export async function adminVoidMarket(marketId: string, reason?: string): Promise<Ack> {
+  try {
+    return await getSocket().timeout(ACK_TIMEOUT_MS).emitWithAck("ADMIN_VOID_MARKET", { marketId, reason });
+  } catch (err) {
+    return failure(err);
+  }
+}
+
+export async function adminVoidBet(payload: AdminVoidBetPayload): Promise<Ack> {
+  try {
+    return await getSocket().timeout(ACK_TIMEOUT_MS).emitWithAck("ADMIN_VOID_BET", payload);
+  } catch (err) {
+    return failure(err);
+  }
+}
+
+export async function adminGetBets(marketId: string): Promise<Ack<AdminMarketBets>> {
+  try {
+    return await getSocket().timeout(ACK_TIMEOUT_MS).emitWithAck("ADMIN_GET_BETS", { marketId });
   } catch (err) {
     return failure(err);
   }

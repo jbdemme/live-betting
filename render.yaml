@@ -18,3 +18,6 @@ services:
       # Not stored in the repo: set it in the Render dashboard (Environment tab).
       - key: DATABASE_URL
         sync: false
+      # Unlocks the in-app admin tools (balances, users, voiding). Admin is off when unset.
+      - key: ADMIN_PASSWORD
+        sync: false
